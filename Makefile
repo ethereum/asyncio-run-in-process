@@ -27,7 +27,7 @@ lint:
 	tox -elint
 
 lint-roll:
-	isort --recursive <MODULE_NAME> tests
+	isort --recursive asyncio_run_in_process tests
 	$(MAKE) lint
 
 test:

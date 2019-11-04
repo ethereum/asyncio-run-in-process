@@ -1,4 +1,2 @@
-
-
 def test_import():
-    import <MODULE_NAME>  # noqa: F401
+    import asyncio_run_in_process  # noqa: F401

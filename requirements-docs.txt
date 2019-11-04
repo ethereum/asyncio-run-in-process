@@ -1,1 +1,1 @@
-<PYPI_NAME>[doc]
+asyncio-run-in-process[doc]
