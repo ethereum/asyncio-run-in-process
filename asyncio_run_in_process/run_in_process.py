@@ -36,7 +36,7 @@ from .typing import (
     TReturn,
 )
 
-logger = logging.getLogger("asyncio-run-in-process")
+logger = logging.getLogger("asyncio_run_in_process")
 
 
 async def _monitor_sub_proc(
