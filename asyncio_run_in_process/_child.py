@@ -167,23 +167,47 @@ async def _do_async_fn(
     # state: EXECUTING
     update_state(to_parent, State.EXECUTING)
 
-    async_fn_task = asyncio.ensure_future(async_fn(*args))
+    # Install a signal handler to set an asyncio.Event upon receiving a SIGINT
+    got_SIGINT = asyncio.Event()
+    loop.add_signal_handler(
+        signal.SIGINT,
+        got_SIGINT.set,
+    )
 
+    # First we need to generate a coroutine.  We need this so we can throw
+    # exceptions into the running coroutine to allow it to handle keyboard
+    # interrupts.
+    async_fn_coro = async_fn(*args)
+
+    # The coroutine is then given to `_handle_coro` which waits for either the
+    # coroutine to finish, returning the result, or for a SIGINT signal at
+    # which point injects a `KeyboardInterrupt` into the running coroutine.
+    async_fn_task = asyncio.ensure_future(_handle_coro(async_fn_coro, got_SIGINT))
+
+    # Now we wait for either a result from the coroutine or a SIGTERM which
+    # triggers immediate cancellation of the running coroutine.
     done, pending = await asyncio.wait(
         (async_fn_task, system_exit_signum),
         return_when=asyncio.FIRST_COMPLETED,
     )
+
+    # We prioritize the `SystemExit` case.
     if system_exit_signum.done():
+        await _do_task_cleanup(async_fn_task)
         raise SystemExit(system_exit_signum.result())
     elif async_fn_task.done():
         return async_fn_task.result()
     else:
-        raise Exception("Should be unreachable")
+        raise Exception("unreachable")
 
 
 def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
     """
-    Run the child process
+    Run the child process.
+
+    This communicates the status of the child process back to the parent
+    process over the given file descriptor, runs the coroutine, handles error
+    cases, and transmits the result back to the parent process.
     """
     # state: INITIALIZING (default initial state)
     with os.fdopen(fd_write, "wb") as to_parent:
