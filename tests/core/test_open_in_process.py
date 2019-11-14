@@ -11,7 +11,7 @@ from asyncio_run_in_process import (
 
 
 @pytest.mark.asyncio
-async def test_open_in_proc_termination_while_running():
+async def test_open_in_proc_SIGTERM_while_running():
     async def do_sleep_forever():
         while True:
             await asyncio.sleep(0)
@@ -22,7 +22,7 @@ async def test_open_in_proc_termination_while_running():
 
 
 @pytest.mark.asyncio
-async def test_open_in_proc_kill_while_running():
+async def test_open_in_proc_SIGKILL_while_running():
     async def do_sleep_forever():
         while True:
             await asyncio.sleep(0)
@@ -34,13 +34,65 @@ async def test_open_in_proc_kill_while_running():
 
 
 @pytest.mark.asyncio
-async def test_open_proc_interrupt_while_running():
+async def test_open_proc_SIGINT_while_running():
     async def do_sleep_forever():
         while True:
             await asyncio.sleep(0)
 
     async with open_in_process(do_sleep_forever) as proc:
         proc.send_signal(signal.SIGINT)
+    assert proc.returncode == 2
+
+
+@pytest.mark.asyncio
+async def test_open_proc_SIGINT_can_be_handled():
+    async def do_sleep_forever():
+        try:
+            while True:
+                await asyncio.sleep(0)
+        except KeyboardInterrupt:
+            return 9999
+
+    async with open_in_process(do_sleep_forever) as proc:
+        proc.send_signal(signal.SIGINT)
+    assert proc.returncode == 0
+    assert proc.result == 9999
+
+
+@pytest.mark.asyncio
+async def test_open_proc_SIGINT_can_be_ignored():
+    async def do_sleep_forever():
+        try:
+            while True:
+                await asyncio.sleep(0)
+        except KeyboardInterrupt:
+            # silence the first SIGINT
+            pass
+
+        try:
+            while True:
+                await asyncio.sleep(0)
+        except KeyboardInterrupt:
+            return 9999
+
+    async with open_in_process(do_sleep_forever) as proc:
+        proc.send_signal(signal.SIGINT)
+        await asyncio.sleep(0.01)
+        proc.send_signal(signal.SIGINT)
+
+    assert proc.returncode == 0
+    assert proc.result == 9999
+
+
+@pytest.mark.asyncio
+async def test_open_proc_KeyboardInterrupt_while_running():
+    async def do_sleep_forever():
+        while True:
+            await asyncio.sleep(0)
+
+    with pytest.raises(KeyboardInterrupt):
+        async with open_in_process(do_sleep_forever) as proc:
+            raise KeyboardInterrupt
     assert proc.returncode == 2
 
 

@@ -159,7 +159,9 @@ async def _monitor_state(
     )
 
 
-RELAY_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+# SIGINT isn't included here because it's handled by catching the
+# `KeyboardInterrupt` exception.
+RELAY_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
 
 
 def open_in_process(

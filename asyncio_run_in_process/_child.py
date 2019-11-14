@@ -9,6 +9,7 @@ from typing import (
     Awaitable,
     BinaryIO,
     Callable,
+    Coroutine,
     Sequence,
 )
 
@@ -70,7 +71,75 @@ def update_state_finished(to_parent: BinaryIO, finished_payload: bytes) -> None:
     to_parent.flush()
 
 
+async def _do_task_cleanup(*tasks: asyncio.Task) -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 SHUTDOWN_SIGNALS = {signal.SIGTERM}
+
+
+async def _handle_SIGTERM(task: asyncio.Task, fut: 'asyncio.Future[int]') -> None:
+    signum = await fut
+    if task.done():
+        return
+
+    task.cancel()
+
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    finally:
+        raise SystemExit(signum)
+
+
+async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.Event) -> TReturn:
+    coro_task = asyncio.ensure_future(coro)
+    while True:
+        # Run the coroutine until it either returns, or a SIGINT is received.
+        # This is done in a loop because the function *could* choose to ignore
+        # the `KeyboardInterrupt` and continue processing, in which case we
+        # reset the signal and resume waiting.
+        done, pending = await asyncio.wait(
+            (coro_task, got_SIGINT.wait()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if got_SIGINT.is_set():
+            got_SIGINT.clear()
+
+            # In the event that a SIGINT was recieve we need to inject a
+            # KeyboardInterrupt exception into the running coroutine.
+            try:
+                coro.throw(KeyboardInterrupt)
+            except StopIteration as err:
+
+                # We need to clean up the actual coroutine which is a little
+                # dirty.  It has been wrapped in an `asyncio.Task` so we get at
+                # it via the returned `pending` tasks.
+                try:
+                    await _do_task_cleanup(*pending)
+                except RuntimeError:
+                    # The RuntimeError is due to us effectively awaiting the
+                    # same coroutine twice.  Silencing it here should be safe.
+                    pass
+
+                # StopIteration is how coroutines signal their return values.
+                # If the exception was raised, we treat the argument as the
+                # return value of the function.
+                return err.value
+            except BaseException as err:
+                raise
+        else:
+            await _do_task_cleanup(*pending)
+            return await coro_task
 
 
 async def _do_async_fn(
