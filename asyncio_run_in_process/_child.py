@@ -16,6 +16,7 @@ from typing import (
 from ._utils import (
     pickle_value,
     receive_pickled_value,
+    RemoteException,
 )
 from .state import (
     State,
@@ -204,8 +205,10 @@ def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
                 result = loop.run_until_complete(
                     _do_async_fn(async_fn, args, to_parent, loop),
                 )
-            except BaseException as err:
-                finished_payload = pickle_value(err)
+            except BaseException:
+                _, exc_value, exc_tb = sys.exc_info()
+                remote_exc = RemoteException(exc_value, exc_tb)
+                finished_payload = pickle_value(remote_exc)
                 raise
             finally:
                 # state: STOPPING
