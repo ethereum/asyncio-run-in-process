@@ -4,7 +4,9 @@ import sys
 
 import cloudpickle
 
-from asyncio_run_in_process._utils import RemoteException
+from asyncio_run_in_process._utils import (
+    RemoteException,
+)
 
 
 def test_RemoteException(caplog):

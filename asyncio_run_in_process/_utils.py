@@ -2,7 +2,9 @@ import io
 import os
 import sys
 import traceback
-from types import TracebackType
+from types import (
+    TracebackType,
+)
 from typing import (
     Any,
     BinaryIO,
@@ -66,7 +68,7 @@ class RemoteTraceback(Exception):
 
 
 class RemoteException(Exception):
-    def __init__(self, exc: Exception, tb: TracebackType) -> None:
+    def __init__(self, exc: BaseException, tb: TracebackType) -> None:
         self.tb = (
             f'\n""" (exception from process: {os.getpid()})\n'
             f"{''.join(traceback.format_exception(type(exc), exc, tb))}"

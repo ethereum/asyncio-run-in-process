@@ -6,7 +6,6 @@ from typing import (
     Any,
     AsyncContextManager,
     AsyncIterator,
-    BinaryIO,
     Callable,
     cast,
 )
@@ -92,56 +91,57 @@ async def _relay_signals(
 
 
 async def _monitor_state(
-    proc: ProcessAPI[TReturn], from_child: BinaryIO, loop: asyncio.AbstractEventLoop,
+    proc: ProcessAPI[TReturn], parent_r: int, loop: asyncio.AbstractEventLoop,
 ) -> None:
-    for expected_state in State:
-        if proc.state is not expected_state:
-            raise InvalidState(
-                f"Process in state {proc.state} but expected state {expected_state}"
+    with os.fdopen(parent_r, "rb", closefd=True) as from_child:
+        for expected_state in State:
+            if proc.state is not expected_state:
+                raise InvalidState(
+                    f"Process in state {proc.state} but expected state {expected_state}"
+                )
+
+            child_state_as_byte = await loop.run_in_executor(None, read_exactly, from_child, 1)
+
+            try:
+                child_state = State(ord(child_state_as_byte))
+            except TypeError:
+                raise InvalidState(f"Child sent state: {child_state_as_byte.hex()}")
+
+            if not proc.state.is_next(child_state):
+                if proc.state is State.FINISHED:
+                    # This case covers when the process is killed with a SIGKILL
+                    # and jumps directly to the finished state.
+                    return
+                raise InvalidState(
+                    f"Invalid state transition: {proc.state} -> {child_state}"
+                )
+
+            if child_state is State.FINISHED:
+                # For the FINISHED state we delay updating the state until we also
+                # have a return value.
+                break
+            elif child_state is State.INITIALIZED:
+                # For the INITIALIZED state we expect an additional payload of the
+                # process id.  The process ID is gotten via this mechanism to
+                # prevent the need for ugly sleep based code in
+                # `_monitor_sub_proc`.
+                pid_bytes = await loop.run_in_executor(None, read_exactly, from_child, 4)
+                proc.pid = int.from_bytes(pid_bytes, 'big')
+
+            await proc.update_state(child_state)
+            logger.debug(
+                "Updated process %s state %s -> %s",
+                proc,
+                expected_state.name,
+                child_state.name,
             )
 
-        child_state_as_byte = await loop.run_in_executor(None, read_exactly, from_child, 1)
+        # This is mostly a sanity check but it ensures that the loop variable is
+        # what we expect it to be before starting to collect the result the stream.
+        if child_state is not State.FINISHED:
+            raise InvalidState(f"Invalid final state: {proc.state}")
 
-        try:
-            child_state = State(ord(child_state_as_byte))
-        except TypeError:
-            raise InvalidState(f"Child sent state: {child_state_as_byte.hex()}")
-
-        if not proc.state.is_next(child_state):
-            if proc.state is State.FINISHED:
-                # This case covers when the process is killed with a SIGKILL
-                # and jumps directly to the finished state.
-                return
-            raise InvalidState(
-                f"Invalid state transition: {proc.state} -> {child_state}"
-            )
-
-        if child_state is State.FINISHED:
-            # For the FINISHED state we delay updating the state until we also
-            # have a return value.
-            break
-        elif child_state is State.INITIALIZED:
-            # For the INITIALIZED state we expect an additional payload of the
-            # process id.  The process ID is gotten via this mechanism to
-            # prevent the need for ugly sleep based code in
-            # `_monitor_sub_proc`.
-            pid_bytes = await loop.run_in_executor(None, read_exactly, from_child, 4)
-            proc.pid = int.from_bytes(pid_bytes, 'big')
-
-        await proc.update_state(child_state)
-        logger.debug(
-            "Updated process %s state %s -> %s",
-            proc,
-            expected_state.name,
-            child_state.name,
-        )
-
-    # This is mostly a sanity check but it ensures that the loop variable is
-    # what we expect it to be before starting to collect the result the stream.
-    if child_state is not State.FINISHED:
-        raise InvalidState(f"Invalid final state: {proc.state}")
-
-    result = await loop.run_in_executor(None, receive_pickled_value, from_child)
+        result = await loop.run_in_executor(None, receive_pickled_value, from_child)
 
     await proc.wait_returncode()
 
@@ -203,65 +203,63 @@ async def _open_in_process(
 
     signal_queue: asyncio.Queue[signal.Signals] = asyncio.Queue()
 
-    with os.fdopen(parent_r, "rb", closefd=True) as from_child:
+    for signum in RELAY_SIGNALS:
+        loop.add_signal_handler(
+            signum,
+            signal_queue.put_nowait,
+            signum,
+        )
 
-        for signum in RELAY_SIGNALS:
-            loop.add_signal_handler(
-                signum,
-                signal_queue.put_nowait,
-                signum,
-            )
+    # Monitoring
+    monitor_sub_proc_task = asyncio.ensure_future(_monitor_sub_proc(proc, sub_proc, parent_w))
+    relay_signals_task = asyncio.ensure_future(_relay_signals(proc, signal_queue))
+    monitor_state_task = asyncio.ensure_future(_monitor_state(proc, parent_r, loop))
 
-        # Monitoring
-        monitor_sub_proc_task = asyncio.ensure_future(_monitor_sub_proc(proc, sub_proc, parent_w))
-        relay_signals_task = asyncio.ensure_future(_relay_signals(proc, signal_queue))
-        monitor_state_task = asyncio.ensure_future(_monitor_state(proc, from_child, loop))
+    await proc.wait_pid()
 
-        await proc.wait_pid()
+    # Wait until the child process has reached the STARTED
+    # state before yielding the context.  This ensures that any
+    # calls to things like `terminate` or `kill` will be handled
+    # properly in the child process.
+    #
+    # The timeout ensures that if something is fundamentally wrong
+    # with the subprocess we don't hang indefinitely.
+    await proc.wait_for_state(State.STARTED)
 
-        # Wait until the child process has reached the STARTED
-        # state before yielding the context.  This ensures that any
-        # calls to things like `terminate` or `kill` will be handled
-        # properly in the child process.
-        #
-        # The timeout ensures that if something is fundamentally wrong
-        # with the subprocess we don't hang indefinitely.
-        await proc.wait_for_state(State.STARTED)
-
+    try:
+        yield proc
+    except KeyboardInterrupt as err:
+        # If a keyboard interrupt is encountered relay it to the
+        # child process and then give it a moment to cleanup before
+        # re-raising
         try:
-            yield proc
-        except KeyboardInterrupt as err:
-            # If a keyboard interrupt is encountered relay it to the
-            # child process and then give it a moment to cleanup before
-            # re-raising
+            proc.send_signal(signal.SIGINT)
             try:
-                proc.send_signal(signal.SIGINT)
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=2)
-                except asyncio.TimeoutError:
-                    pass
-            finally:
-                raise err
+                await asyncio.wait_for(proc.wait(), timeout=2)
+            except asyncio.TimeoutError:
+                pass
         finally:
-            await proc.wait()
+            raise err
+    finally:
+        await proc.wait()
 
-            monitor_sub_proc_task.cancel()
-            try:
-                await monitor_sub_proc_task
-            except asyncio.CancelledError:
-                pass
+        monitor_sub_proc_task.cancel()
+        try:
+            await monitor_sub_proc_task
+        except asyncio.CancelledError:
+            pass
 
-            monitor_state_task.cancel()
-            try:
-                await monitor_state_task
-            except asyncio.CancelledError:
-                pass
+        monitor_state_task.cancel()
+        try:
+            await monitor_state_task
+        except asyncio.CancelledError:
+            pass
 
-            relay_signals_task.cancel()
-            try:
-                await relay_signals_task
-            except asyncio.CancelledError:
-                pass
+        relay_signals_task.cancel()
+        try:
+            await relay_signals_task
+        except asyncio.CancelledError:
+            pass
 
 
 async def run_in_process(async_fn: Callable[..., TReturn], *args: Any) -> TReturn:

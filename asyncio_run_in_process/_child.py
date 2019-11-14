@@ -6,17 +6,17 @@ import signal
 import sys
 from typing import (
     Any,
-    Awaitable,
     BinaryIO,
     Callable,
     Coroutine,
     Sequence,
+    cast,
 )
 
 from ._utils import (
+    RemoteException,
     pickle_value,
     receive_pickled_value,
-    RemoteException,
 )
 from .state import (
     State,
@@ -72,7 +72,7 @@ def update_state_finished(to_parent: BinaryIO, finished_payload: bytes) -> None:
     to_parent.flush()
 
 
-async def _do_task_cleanup(*tasks: asyncio.Task) -> None:
+async def _do_task_cleanup(*tasks: 'asyncio.Future[Any]') -> None:
     for task in tasks:
         if not task.done():
             task.cancel()
@@ -86,19 +86,9 @@ async def _do_task_cleanup(*tasks: asyncio.Task) -> None:
 SHUTDOWN_SIGNALS = {signal.SIGTERM}
 
 
-async def _handle_SIGTERM(task: asyncio.Task, fut: 'asyncio.Future[int]') -> None:
+async def _handle_SIGTERM(task: 'asyncio.Task[TReturn]', fut: 'asyncio.Future[int]') -> None:
     signum = await fut
-    if task.done():
-        return
-
-    task.cancel()
-
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-    finally:
-        raise SystemExit(signum)
+    raise SystemExit(signum)
 
 
 async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.Event) -> TReturn:
@@ -135,7 +125,7 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
                 # StopIteration is how coroutines signal their return values.
                 # If the exception was raised, we treat the argument as the
                 # return value of the function.
-                return err.value
+                return cast(TReturn, err.value)
             except BaseException as err:
                 raise
         else:
@@ -144,7 +134,7 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
 
 
 async def _do_async_fn(
-    async_fn: Callable[..., Awaitable[TReturn]],
+    async_fn: Callable[..., Coroutine[Any, Any, TReturn]],
     args: Sequence[Any],
     to_parent: BinaryIO,
     loop: asyncio.AbstractEventLoop,
@@ -177,12 +167,14 @@ async def _do_async_fn(
     # First we need to generate a coroutine.  We need this so we can throw
     # exceptions into the running coroutine to allow it to handle keyboard
     # interrupts.
-    async_fn_coro = async_fn(*args)
+    async_fn_coro: Coroutine[Any, Any, TReturn] = async_fn(*args)
 
     # The coroutine is then given to `_handle_coro` which waits for either the
     # coroutine to finish, returning the result, or for a SIGINT signal at
     # which point injects a `KeyboardInterrupt` into the running coroutine.
-    async_fn_task = asyncio.ensure_future(_handle_coro(async_fn_coro, got_SIGINT))
+    async_fn_task: 'asyncio.Future[TReturn]' = asyncio.ensure_future(
+        _handle_coro(async_fn_coro, got_SIGINT),
+    )
 
     # Now we wait for either a result from the coroutine or a SIGTERM which
     # triggers immediate cancellation of the running coroutine.
@@ -231,7 +223,8 @@ def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
                 )
             except BaseException:
                 _, exc_value, exc_tb = sys.exc_info()
-                remote_exc = RemoteException(exc_value, exc_tb)
+                # `mypy` thingks that `exc_value` and `exc_tb` are `Optional[..]` types
+                remote_exc = RemoteException(exc_value, exc_tb)  # type: ignore
                 finished_payload = pickle_value(remote_exc)
                 raise
             finally:
