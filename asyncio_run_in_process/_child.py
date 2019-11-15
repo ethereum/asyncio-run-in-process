@@ -108,20 +108,17 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
     - When the `KeyboardInterrupt` hits the coroutine it can return a value
       which is sent using a `StopIteration` exception.  We treat this as the
       return value of the coroutine.
-
-    The raising and silencing of the `RuntimeError` is due to the coroutine
-    being wrapped in a `Task`.  At this point asyncio considers itself
-    responsible for the lifecycle of the coroutine since asyncio won't let you
-    abandon tasks.  This leaves us with a dilema.  If we don't `await` the task
-    the asyncio will complain that the task result/exception was never
-    retrieved.  But if we do `await` it in the case that we've thrown a
-    `KeyboardInterrupt` into the running coroutine, then asyncio complains that
-    it has already been awaited by raising a `RuntimeError`.  This leaves us
-    with the lesser of two evils, catching and silencing the `RuntimeError`
-    rather than leaving an abandoned task which would cause a warning to be
-    issued when the python process exits.
     """
-    coro_task = asyncio.ensure_future(coro)
+    # The `coro` is first wrapped in `asyncio.shield` to protect us in the case
+    # that a SIGINT happens.  In this case, the coro has a chance to return a
+    # value during exception handling, in which case we are left with
+    # `coro_task` which has not been awaited and thus will cause asyncio to
+    # issue a warning.  However, since the coroutine has already exited, if we
+    # await the `coro_task` then we will encounter a `RuntimeError`.  By
+    # wrapping the coroutine in `asyncio.shield` we side-step this by
+    # preventing the cancellation to actually penetrate the coroutine, allowing
+    # us to await the `coro_task` without causing the `RuntimeError`.
+    coro_task = asyncio.ensure_future(asyncio.shield(coro))
     while True:
         # Run the coroutine until it either returns, or a SIGINT is received.
         # This is done in a loop because the function *could* choose to ignore
@@ -144,12 +141,7 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
                 # We need to clean up the actual coroutine which is a little
                 # dirty.  It has been wrapped in an `asyncio.Task` so we get at
                 # it via the returned `pending` tasks.
-                try:
-                    await _do_task_cleanup(*pending)
-                except RuntimeError:
-                    # The RuntimeError is due to us effectively awaiting the
-                    # same coroutine twice.  Silencing it here should be safe.
-                    pass
+                await _do_task_cleanup(*pending)
 
                 # StopIteration is how coroutines signal their return values.
                 # If the exception was raised, we treat the argument as the
