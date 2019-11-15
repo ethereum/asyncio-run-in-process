@@ -92,6 +92,35 @@ async def _handle_SIGTERM(task: 'asyncio.Task[TReturn]', fut: 'asyncio.Future[in
 
 
 async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.Event) -> TReturn:
+    """
+    Understanding this function requires some detailed knowledge of how
+    coroutines work.
+
+    The goal here is to run a coroutine function and wait for the result.
+    However, if a SIGINT signal is received then we want to inject a
+    `KeyboardInterrupt` exception into the running coroutine.
+
+    Some additional nuance:
+
+    - The `SIGINT` signal can happen multiple times and each time we want to
+      throw a `KeyboardInterrupt` into the running coroutine which may choose to
+      ignore the exception and continue executing.
+    - When the `KeyboardInterrupt` hits the coroutine it can return a value
+      which is sent using a `StopIteration` exception.  We treat this as the
+      return value of the coroutine.
+
+    The raising and silencing of the `RuntimeError` is due to the coroutine
+    being wrapped in a `Task`.  At this point asyncio considers itself
+    responsible for the lifecycle of the coroutine since asyncio won't let you
+    abandon tasks.  This leaves us with a dilema.  If we don't `await` the task
+    the asyncio will complain that the task result/exception was never
+    retrieved.  But if we do `await` it in the case that we've thrown a
+    `KeyboardInterrupt` into the running coroutine, then asyncio complains that
+    it has already been awaited by raising a `RuntimeError`.  This leaves us
+    with the lesser of two evils, catching and silencing the `RuntimeError`
+    rather than leaving an abandoned task which would cause a warning to be
+    issued when the python process exits.
+    """
     coro_task = asyncio.ensure_future(coro)
     while True:
         # Run the coroutine until it either returns, or a SIGINT is received.
