@@ -1,5 +1,10 @@
 import io
+import os
 import sys
+import traceback
+from types import (
+    TracebackType,
+)
 from typing import (
     Any,
     BinaryIO,
@@ -51,3 +56,34 @@ def receive_pickled_value(stream: BinaryIO) -> Any:
     serialized_len = int.from_bytes(len_bytes, "big")
     serialized_result = read_exactly(stream, serialized_len)
     return cloudpickle.loads(serialized_result)
+
+
+class RemoteTraceback(Exception):
+
+    def __init__(self, tb: str) -> None:
+        self.tb = tb
+
+    def __str__(self) -> str:
+        return self.tb
+
+
+class RemoteException(Exception):
+    def __init__(self, exc: BaseException, tb: TracebackType) -> None:
+        self.tb = (
+            f'\n""" (exception from process: {os.getpid()})\n'
+            f"{''.join(traceback.format_exception(type(exc), exc, tb))}"
+            '"""'
+        )
+        self.exc = exc
+
+    def __reduce__(self) -> Any:
+        """
+        Trick the `pickle` module into recreating this as the original
+        exception when the value gets unpickled.
+        """
+        return rebuild_exc, (self.exc, self.tb)
+
+
+def rebuild_exc(exc, tb):  # type: ignore
+    exc.__cause__ = RemoteTraceback(tb)
+    return exc

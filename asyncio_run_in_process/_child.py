@@ -6,13 +6,15 @@ import signal
 import sys
 from typing import (
     Any,
-    Awaitable,
     BinaryIO,
     Callable,
+    Coroutine,
     Sequence,
+    cast,
 )
 
 from ._utils import (
+    RemoteException,
     pickle_value,
     receive_pickled_value,
 )
@@ -23,7 +25,7 @@ from .typing import (
     TReturn,
 )
 
-logger = logging.getLogger("asyncio-run-in-process")
+logger = logging.getLogger("asyncio_run_in_process")
 
 
 #
@@ -70,11 +72,92 @@ def update_state_finished(to_parent: BinaryIO, finished_payload: bytes) -> None:
     to_parent.flush()
 
 
+async def _do_task_cleanup(*tasks: 'asyncio.Future[Any]') -> None:
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 SHUTDOWN_SIGNALS = {signal.SIGTERM}
 
 
+async def _handle_SIGTERM(task: 'asyncio.Task[TReturn]', fut: 'asyncio.Future[int]') -> None:
+    signum = await fut
+    raise SystemExit(signum)
+
+
+async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.Event) -> TReturn:
+    """
+    Understanding this function requires some detailed knowledge of how
+    coroutines work.
+
+    The goal here is to run a coroutine function and wait for the result.
+    However, if a SIGINT signal is received then we want to inject a
+    `KeyboardInterrupt` exception into the running coroutine.
+
+    Some additional nuance:
+
+    - The `SIGINT` signal can happen multiple times and each time we want to
+      throw a `KeyboardInterrupt` into the running coroutine which may choose to
+      ignore the exception and continue executing.
+    - When the `KeyboardInterrupt` hits the coroutine it can return a value
+      which is sent using a `StopIteration` exception.  We treat this as the
+      return value of the coroutine.
+    """
+    # The `coro` is first wrapped in `asyncio.shield` to protect us in the case
+    # that a SIGINT happens.  In this case, the coro has a chance to return a
+    # value during exception handling, in which case we are left with
+    # `coro_task` which has not been awaited and thus will cause asyncio to
+    # issue a warning.  However, since the coroutine has already exited, if we
+    # await the `coro_task` then we will encounter a `RuntimeError`.  By
+    # wrapping the coroutine in `asyncio.shield` we side-step this by
+    # preventing the cancellation to actually penetrate the coroutine, allowing
+    # us to await the `coro_task` without causing the `RuntimeError`.
+    coro_task = asyncio.ensure_future(asyncio.shield(coro))
+    while True:
+        # Run the coroutine until it either returns, or a SIGINT is received.
+        # This is done in a loop because the function *could* choose to ignore
+        # the `KeyboardInterrupt` and continue processing, in which case we
+        # reset the signal and resume waiting.
+        done, pending = await asyncio.wait(
+            (coro_task, got_SIGINT.wait()),
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if coro_task.done():
+            await _do_task_cleanup(*pending)
+            return await coro_task
+        elif got_SIGINT.is_set():
+            got_SIGINT.clear()
+
+            # In the event that a SIGINT was recieve we need to inject a
+            # KeyboardInterrupt exception into the running coroutine.
+            try:
+                coro.throw(KeyboardInterrupt)
+            except StopIteration as err:
+
+                # We need to clean up the actual coroutine which is a little
+                # dirty.  It has been wrapped in an `asyncio.Task` so we get at
+                # it via the returned `pending` tasks.
+                await _do_task_cleanup(*pending)
+
+                # StopIteration is how coroutines signal their return values.
+                # If the exception was raised, we treat the argument as the
+                # return value of the function.
+                return cast(TReturn, err.value)
+            except BaseException as err:
+                raise
+        else:
+            raise Exception("Code path should not be reachable")
+
+
 async def _do_async_fn(
-    async_fn: Callable[..., Awaitable[TReturn]],
+    async_fn: Callable[..., Coroutine[Any, Any, TReturn]],
     args: Sequence[Any],
     to_parent: BinaryIO,
     loop: asyncio.AbstractEventLoop,
@@ -97,23 +180,49 @@ async def _do_async_fn(
     # state: EXECUTING
     update_state(to_parent, State.EXECUTING)
 
-    async_fn_task = asyncio.ensure_future(async_fn(*args))
+    # Install a signal handler to set an asyncio.Event upon receiving a SIGINT
+    got_SIGINT = asyncio.Event()
+    loop.add_signal_handler(
+        signal.SIGINT,
+        got_SIGINT.set,
+    )
 
+    # First we need to generate a coroutine.  We need this so we can throw
+    # exceptions into the running coroutine to allow it to handle keyboard
+    # interrupts.
+    async_fn_coro: Coroutine[Any, Any, TReturn] = async_fn(*args)
+
+    # The coroutine is then given to `_handle_coro` which waits for either the
+    # coroutine to finish, returning the result, or for a SIGINT signal at
+    # which point injects a `KeyboardInterrupt` into the running coroutine.
+    async_fn_task: 'asyncio.Future[TReturn]' = asyncio.ensure_future(
+        _handle_coro(async_fn_coro, got_SIGINT),
+    )
+
+    # Now we wait for either a result from the coroutine or a SIGTERM which
+    # triggers immediate cancellation of the running coroutine.
     done, pending = await asyncio.wait(
         (async_fn_task, system_exit_signum),
         return_when=asyncio.FIRST_COMPLETED,
     )
+
+    # We prioritize the `SystemExit` case.
     if system_exit_signum.done():
+        await _do_task_cleanup(async_fn_task)
         raise SystemExit(system_exit_signum.result())
     elif async_fn_task.done():
         return async_fn_task.result()
     else:
-        raise Exception("Should be unreachable")
+        raise Exception("unreachable")
 
 
 def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
     """
-    Run the child process
+    Run the child process.
+
+    This communicates the status of the child process back to the parent
+    process over the given file descriptor, runs the coroutine, handles error
+    cases, and transmits the result back to the parent process.
     """
     # state: INITIALIZING (default initial state)
     with os.fdopen(fd_write, "wb") as to_parent:
@@ -135,8 +244,11 @@ def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
                 result = loop.run_until_complete(
                     _do_async_fn(async_fn, args, to_parent, loop),
                 )
-            except BaseException as err:
-                finished_payload = pickle_value(err)
+            except BaseException:
+                _, exc_value, exc_tb = sys.exc_info()
+                # `mypy` thingks that `exc_value` and `exc_tb` are `Optional[..]` types
+                remote_exc = RemoteException(exc_value, exc_tb)  # type: ignore
+                finished_payload = pickle_value(remote_exc)
                 raise
             finally:
                 # state: STOPPING
