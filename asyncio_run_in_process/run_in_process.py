@@ -91,9 +91,9 @@ async def _relay_signals(
 
 
 async def _monitor_state(
-    proc: ProcessAPI[TReturn], parent_r: int, loop: asyncio.AbstractEventLoop,
+    proc: ProcessAPI[TReturn], parent_read_fd: int, loop: asyncio.AbstractEventLoop,
 ) -> None:
-    with os.fdopen(parent_r, "rb", closefd=True) as from_child:
+    with os.fdopen(parent_read_fd, "rb", closefd=True) as from_child:
         for expected_state in State:
             if proc.state is not expected_state:
                 raise InvalidState(

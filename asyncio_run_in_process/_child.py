@@ -129,7 +129,10 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
             return_when=asyncio.FIRST_COMPLETED,
         )
 
-        if got_SIGINT.is_set():
+        if coro_task.done():
+            await _do_task_cleanup(*pending)
+            return await coro_task
+        elif got_SIGINT.is_set():
             got_SIGINT.clear()
 
             # In the event that a SIGINT was recieve we need to inject a
@@ -150,8 +153,7 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
             except BaseException as err:
                 raise
         else:
-            await _do_task_cleanup(*pending)
-            return await coro_task
+            raise Exception("Code path should not be reachable")
 
 
 async def _do_async_fn(

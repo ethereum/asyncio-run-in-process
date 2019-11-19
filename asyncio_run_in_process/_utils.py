@@ -77,6 +77,10 @@ class RemoteException(Exception):
         self.exc = exc
 
     def __reduce__(self) -> Any:
+        """
+        Trick the `pickle` module into recreating this as the original
+        exception when the value gets unpickled.
+        """
         return rebuild_exc, (self.exc, self.tb)
 
 
