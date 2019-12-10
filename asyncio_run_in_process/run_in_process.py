@@ -221,8 +221,6 @@ async def _open_in_process(
 
     sub_proc = await asyncio.create_subprocess_exec(
         *command,
-        # mypy doesn't recognize that loop can be `None`
-        loop=loop,  # type: ignore
         **_update_subprocess_kwargs(subprocess_kwargs, child_r, child_w),
     )
     if loop is None:
