@@ -43,33 +43,33 @@ if TYPE_CHECKING:
             'env': Optional[Mapping[str, str]],
             'startupinfo': Optional[STARTUPINFO],
             'creationflags': Optional[Union[
-                Union[
-                    Literal[subprocess.CREATE_NEW_CONSOLE],  # type: ignore
-                    Literal[subprocess.CREATE_NEW_PROCESS_GROUP],  # type: ignore
-                    Literal[subprocess.ABOVE_NORMAL_PRIORITY_CLASS],  # type: ignore
-                    Literal[subprocess.BELOW_NORMAL_PRIORITY_CLASS],  # type: ignore
-                    Literal[subprocess.HIGH_PRIORITY_CLASS],  # type: ignore
-                    Literal[subprocess.IDLE_PRIORITY_CLASS],  # type: ignore
-                    Literal[subprocess.NORMAL_PRIORITY_CLASS],  # type: ignore
-                    Literal[subprocess.REALTIME_PRIORITY_CLASS],  # type: ignore
-                    Literal[subprocess.CREATE_NO_WINDOW],  # type: ignore
-                    Literal[subprocess.DETACHED_PROCESS],  # type: ignore
-                    Literal[subprocess.CREATE_DEFAULT_ERROR_MODE],  # type: ignore
-                    Literal[subprocess.CREATE_BREAKAWAY_FROM_JOB],  # type: ignore
+                Literal[
+                    subprocess.CREATE_NEW_CONSOLE,  # type: ignore
+                    subprocess.CREATE_NEW_PROCESS_GROUP,  # type: ignore
+                    subprocess.ABOVE_NORMAL_PRIORITY_CLASS,  # type: ignore
+                    subprocess.BELOW_NORMAL_PRIORITY_CLASS,  # type: ignore
+                    subprocess.HIGH_PRIORITY_CLASS,  # type: ignore
+                    subprocess.IDLE_PRIORITY_CLASS,  # type: ignore
+                    subprocess.NORMAL_PRIORITY_CLASS,  # type: ignore
+                    subprocess.REALTIME_PRIORITY_CLASS,  # type: ignore
+                    subprocess.CREATE_NO_WINDOW,  # type: ignore
+                    subprocess.DETACHED_PROCESS,  # type: ignore
+                    subprocess.CREATE_DEFAULT_ERROR_MODE,  # type: ignore
+                    subprocess.CREATE_BREAKAWAY_FROM_JOB,  # type: ignore
                 ],
-                Sequence[Union[
-                    Literal[subprocess.CREATE_NEW_CONSOLE],
-                    Literal[subprocess.CREATE_NEW_PROCESS_GROUP],
-                    Literal[subprocess.ABOVE_NORMAL_PRIORITY_CLASS],
-                    Literal[subprocess.BELOW_NORMAL_PRIORITY_CLASS],
-                    Literal[subprocess.HIGH_PRIORITY_CLASS],
-                    Literal[subprocess.IDLE_PRIORITY_CLASS],
-                    Literal[subprocess.NORMAL_PRIORITY_CLASS],
-                    Literal[subprocess.REALTIME_PRIORITY_CLASS],
-                    Literal[subprocess.CREATE_NO_WINDOW],
-                    Literal[subprocess.DETACHED_PROCESS],
-                    Literal[subprocess.CREATE_DEFAULT_ERROR_MODE],
-                    Literal[subprocess.CREATE_BREAKAWAY_FROM_JOB],
+                Sequence[Literal[
+                    subprocess.CREATE_NEW_CONSOLE,
+                    subprocess.CREATE_NEW_PROCESS_GROUP,
+                    subprocess.ABOVE_NORMAL_PRIORITY_CLASS,
+                    subprocess.BELOW_NORMAL_PRIORITY_CLASS,
+                    subprocess.HIGH_PRIORITY_CLASS,
+                    subprocess.IDLE_PRIORITY_CLASS,
+                    subprocess.NORMAL_PRIORITY_CLASS,
+                    subprocess.REALTIME_PRIORITY_CLASS,
+                    subprocess.CREATE_NO_WINDOW,
+                    subprocess.DETACHED_PROCESS,
+                    subprocess.CREATE_DEFAULT_ERROR_MODE,
+                    subprocess.CREATE_BREAKAWAY_FROM_JOB,
                 ]],
             ]],
         },
