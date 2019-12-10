@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import (
     Path,
 )
@@ -36,3 +37,18 @@ async def test_run_in_process_with_error():
 
     with pytest.raises(ValueError, match="Some err"):
         await asyncio.wait_for(run_in_process(raise_err), timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_run_in_process_pass_environment_variables():
+    # sanity
+    assert 'ASYNC_RUN_IN_PROCESS_ENV_TEST' not in os.environ
+
+    async def return_env():
+        return os.environ['ASYNC_RUN_IN_PROCESS_ENV_TEST']
+
+    value = await run_in_process(
+        return_env,
+        subprocess_kwargs={'env': {'ASYNC_RUN_IN_PROCESS_ENV_TEST': 'test-value'}},
+    )
+    assert value == 'test-value'

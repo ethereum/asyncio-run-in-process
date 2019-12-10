@@ -17,6 +17,7 @@ extras_require = {
         "isort>=4.2.15,<5",
         "mypy==0.740",
         "pydocstyle>=3.0.0,<4",
+        "typing-extensions>=3.7.4.1,<4;python_version<'3.8'",
     ],
     'doc': [
         "Sphinx>=1.6.5,<2",
