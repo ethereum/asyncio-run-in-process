@@ -3,10 +3,12 @@ import logging
 import os
 import signal
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncContextManager,
     AsyncIterator,
     Callable,
+    Optional,
     cast,
 )
 
@@ -34,6 +36,11 @@ from .state import (
 from .typing import (
     TReturn,
 )
+
+if TYPE_CHECKING:
+    from typing import Tuple  # noqa: F401
+    from .typing import SubprocessKwargs  # noqa: F401
+
 
 logger = logging.getLogger("asyncio_run_in_process")
 
@@ -168,11 +175,32 @@ def open_in_process(
     async_fn: Callable[..., TReturn],
     *args: Any,
     loop: asyncio.AbstractEventLoop = None,
+    subprocess_kwargs: 'SubprocessKwargs' = None,
 ) -> AsyncContextManager[ProcessAPI[TReturn]]:
     return cast(
         AsyncContextManager[ProcessAPI[TReturn]],
-        _open_in_process(async_fn, *args, loop=loop),
+        _open_in_process(async_fn, *args, loop=loop, subprocess_kwargs=subprocess_kwargs),
     )
+
+
+def _update_subprocess_kwargs(subprocess_kwargs: Optional['SubprocessKwargs'],
+                              child_r: int,
+                              child_w: int) -> 'SubprocessKwargs':
+    if subprocess_kwargs is None:
+        subprocess_kwargs = {}
+
+    base_pass_fds = subprocess_kwargs.get('pass_fds', ())
+    pass_fds: Tuple[int, ...]
+
+    if base_pass_fds is None:
+        pass_fds = (child_r, child_w)
+    else:
+        pass_fds = tuple(set(base_pass_fds).union((child_r, child_w)))
+
+    updated_kwargs = subprocess_kwargs.copy()
+    updated_kwargs['pass_fds'] = pass_fds
+
+    return updated_kwargs
 
 
 # mypy recognizes this decorator as being untyped.
@@ -181,6 +209,7 @@ async def _open_in_process(
     async_fn: Callable[..., TReturn],
     *args: Any,
     loop: asyncio.AbstractEventLoop = None,
+    subprocess_kwargs: 'SubprocessKwargs' = None,
 ) -> AsyncIterator[ProcessAPI[TReturn]]:
     proc: Process[TReturn] = Process(async_fn, args)
 
@@ -192,12 +221,10 @@ async def _open_in_process(
 
     sub_proc = await asyncio.create_subprocess_exec(
         *command,
-        # stdin=subprocess.PIPE,
-        # stdout=subprocess.PIPE,
-        # stderr=subprocess.PIPE,
-        pass_fds=(child_r, child_w),
+        # mypy doesn't recognize that loop can be `None`
+        loop=loop,  # type: ignore
+        **_update_subprocess_kwargs(subprocess_kwargs, child_r, child_w),
     )
-
     if loop is None:
         loop = asyncio.get_event_loop()
 
@@ -262,7 +289,16 @@ async def _open_in_process(
             pass
 
 
-async def run_in_process(async_fn: Callable[..., TReturn], *args: Any) -> TReturn:
-    async with open_in_process(async_fn, *args) as proc:
+async def run_in_process(async_fn: Callable[..., TReturn],
+                         *args: Any,
+                         loop: asyncio.AbstractEventLoop = None,
+                         subprocess_kwargs: 'SubprocessKwargs' = None) -> TReturn:
+    proc_ctx = open_in_process(
+        async_fn,
+        *args,
+        loop=loop,
+        subprocess_kwargs=subprocess_kwargs,
+    )
+    async with proc_ctx as proc:
         await proc.wait()
     return proc.result
