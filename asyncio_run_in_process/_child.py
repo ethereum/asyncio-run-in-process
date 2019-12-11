@@ -15,6 +15,7 @@ from typing import (
 
 from ._utils import (
     RemoteException,
+    cleanup_tasks,
     pickle_value,
     receive_pickled_value,
 )
@@ -43,17 +44,6 @@ def update_state_finished(to_parent: BinaryIO, finished_payload: bytes) -> None:
     payload = State.FINISHED.value.to_bytes(1, 'big') + finished_payload
     to_parent.write(payload)
     to_parent.flush()
-
-
-async def _do_task_cleanup(*tasks: 'asyncio.Future[Any]') -> None:
-    for task in tasks:
-        if not task.done():
-            task.cancel()
-
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
 
 
 SHUTDOWN_SIGNALS = {signal.SIGTERM}
@@ -92,41 +82,37 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
     # preventing the cancellation to actually penetrate the coroutine, allowing
     # us to await the `coro_task` without causing the `RuntimeError`.
     coro_task = asyncio.ensure_future(asyncio.shield(coro))
-    while True:
-        # Run the coroutine until it either returns, or a SIGINT is received.
-        # This is done in a loop because the function *could* choose to ignore
-        # the `KeyboardInterrupt` and continue processing, in which case we
-        # reset the signal and resume waiting.
-        done, pending = await asyncio.wait(
-            (coro_task, got_SIGINT.wait()),
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+    async with cleanup_tasks(coro_task):
+        while True:
+            # Run the coroutine until it either returns, or a SIGINT is received.
+            # This is done in a loop because the function *could* choose to ignore
+            # the `KeyboardInterrupt` and continue processing, in which case we
+            # reset the signal and resume waiting.
+            done, pending = await asyncio.wait(
+                (coro_task, got_SIGINT.wait()),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
-        if coro_task.done():
-            await _do_task_cleanup(*pending)
-            return await coro_task
-        elif got_SIGINT.is_set():
-            got_SIGINT.clear()
+            if coro_task.done():
+                async with cleanup_tasks(*done, *pending):
+                    return await coro_task
+            elif got_SIGINT.is_set():
+                got_SIGINT.clear()
 
-            # In the event that a SIGINT was recieve we need to inject a
-            # KeyboardInterrupt exception into the running coroutine.
-            try:
-                coro.throw(KeyboardInterrupt)
-            except StopIteration as err:
-
-                # We need to clean up the actual coroutine which is a little
-                # dirty.  It has been wrapped in an `asyncio.Task` so we get at
-                # it via the returned `pending` tasks.
-                await _do_task_cleanup(*pending)
-
-                # StopIteration is how coroutines signal their return values.
-                # If the exception was raised, we treat the argument as the
-                # return value of the function.
-                return cast(TReturn, err.value)
-            except BaseException as err:
-                raise
-        else:
-            raise Exception("Code path should not be reachable")
+                # In the event that a SIGINT was recieve we need to inject a
+                # KeyboardInterrupt exception into the running coroutine.
+                try:
+                    coro.throw(KeyboardInterrupt)
+                except StopIteration as err:
+                    # StopIteration is how coroutines signal their return values.
+                    # If the exception was raised, we treat the argument as the
+                    # return value of the function.
+                    async with cleanup_tasks(*done, *pending):
+                        return cast(TReturn, err.value)
+                except BaseException as err:
+                    raise
+            else:
+                raise Exception("Code path should not be reachable")
 
 
 async def _do_async_fn(
@@ -180,13 +166,13 @@ async def _do_async_fn(
     )
 
     # We prioritize the `SystemExit` case.
-    if system_exit_signum.done():
-        await _do_task_cleanup(async_fn_task)
-        raise SystemExit(system_exit_signum.result())
-    elif async_fn_task.done():
-        return async_fn_task.result()
-    else:
-        raise Exception("unreachable")
+    async with cleanup_tasks(*done, *pending):
+        if system_exit_signum.done():
+            raise SystemExit(await system_exit_signum)
+        elif async_fn_task.done():
+            return await async_fn_task
+        else:
+            raise Exception("unreachable")
 
 
 def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:

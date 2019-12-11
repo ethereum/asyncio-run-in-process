@@ -17,6 +17,7 @@ from async_generator import (
 )
 
 from ._utils import (
+    cleanup_tasks,
     get_subprocess_command,
     read_exactly,
     receive_pickled_value,
@@ -240,51 +241,34 @@ async def _open_in_process(
     relay_signals_task = asyncio.ensure_future(_relay_signals(proc, signal_queue))
     monitor_state_task = asyncio.ensure_future(_monitor_state(proc, parent_r, loop))
 
-    await proc.wait_pid()
+    async with cleanup_tasks(monitor_sub_proc_task, relay_signals_task, monitor_state_task):
+        await proc.wait_pid()
 
-    # Wait until the child process has reached the STARTED
-    # state before yielding the context.  This ensures that any
-    # calls to things like `terminate` or `kill` will be handled
-    # properly in the child process.
-    #
-    # The timeout ensures that if something is fundamentally wrong
-    # with the subprocess we don't hang indefinitely.
-    await proc.wait_for_state(State.STARTED)
+        # Wait until the child process has reached the STARTED
+        # state before yielding the context.  This ensures that any
+        # calls to things like `terminate` or `kill` will be handled
+        # properly in the child process.
+        #
+        # The timeout ensures that if something is fundamentally wrong
+        # with the subprocess we don't hang indefinitely.
+        await proc.wait_for_state(State.STARTED)
 
-    try:
-        yield proc
-    except KeyboardInterrupt as err:
-        # If a keyboard interrupt is encountered relay it to the
-        # child process and then give it a moment to cleanup before
-        # re-raising
         try:
-            proc.send_signal(signal.SIGINT)
+            yield proc
+        except KeyboardInterrupt as err:
+            # If a keyboard interrupt is encountered relay it to the
+            # child process and then give it a moment to cleanup before
+            # re-raising
             try:
-                await asyncio.wait_for(proc.wait(), timeout=2)
-            except asyncio.TimeoutError:
-                pass
+                proc.send_signal(signal.SIGINT)
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+            finally:
+                raise err
         finally:
-            raise err
-    finally:
-        await proc.wait()
-
-        monitor_sub_proc_task.cancel()
-        try:
-            await monitor_sub_proc_task
-        except asyncio.CancelledError:
-            pass
-
-        monitor_state_task.cancel()
-        try:
-            await monitor_state_task
-        except asyncio.CancelledError:
-            pass
-
-        relay_signals_task.cancel()
-        try:
-            await relay_signals_task
-        except asyncio.CancelledError:
-            pass
+            await proc.wait()
 
 
 async def run_in_process(async_fn: Callable[..., TReturn],
