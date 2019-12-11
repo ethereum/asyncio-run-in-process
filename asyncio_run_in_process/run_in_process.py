@@ -58,7 +58,7 @@ async def _monitor_sub_proc(
     # we write the execution data immediately without waiting for the
     # `WAIT_EXEC_DATA` state to ensure that the child process doesn't have
     # to wait for that data due to the round trip times between processes.
-    logger.debug("writing execution data for %s over stdin", proc)
+    logger.debug("writing execution data for %s over fd=%d", proc, parent_w)
     # pass the child process the serialized `async_fn` and `args`
 
     with os.fdopen(parent_w, "wb") as to_child:
