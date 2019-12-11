@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -254,21 +255,61 @@ async def _open_in_process(
         await proc.wait_for_state(State.STARTED)
 
         try:
-            yield proc
-        except KeyboardInterrupt as err:
-            # If a keyboard interrupt is encountered relay it to the
-            # child process and then give it a moment to cleanup before
-            # re-raising
             try:
-                proc.send_signal(signal.SIGINT)
+                yield proc
+            except KeyboardInterrupt as err:
+                # If a keyboard interrupt is encountered relay it to the
+                # child process and then give it a moment to cleanup before
+                # re-raising
+                logger.debug("Relaying SIGINT to pid=%d", sub_proc.pid)
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=2)
-                except asyncio.TimeoutError:
-                    pass
-            finally:
-                raise err
+                    proc.send_signal(signal.SIGINT)
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2)
+                    except asyncio.TimeoutError:
+                        logger.debug(
+                            "Timed out waiting for pid=%d to exit after relaying SIGINT",
+                            sub_proc.pid,
+                        )
+                        pass
+                finally:
+                    raise err
+            except asyncio.CancelledError as err:
+                # If a keyboard interrupt is encountered relay it to the
+                # child process and then give it a moment to cleanup before
+                # re-raising
+                logger.debug(
+                    "Got CancelledError while running subprocess pid=%d.  Sending SIGTERM.",
+                    sub_proc.pid,
+                )
+                try:
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=2)
+                    except asyncio.TimeoutError:
+                        logger.debug(
+                            "Timed out waiting for pid=%d to exit after SIGTERM",
+                            sub_proc.pid,
+                        )
+                        pass
+                finally:
+                    raise err
+            else:
+                # In the case that the yielded context block exits without an
+                # error we wait for the process to finish naturally.  This can
+                # hang indefinitely.
+                await proc.wait()
         finally:
-            await proc.wait()
+            if sub_proc.returncode is None:
+                # If the process has not returned at this stage we need to hard
+                # kill it to prevent it from hanging.
+                logger.debug(
+                    "Submodules pid=%d failed to exit cleanly.  Sending SIGKILL",
+                    sub_proc.pid,
+                    # include a stacktrace if this happened due to an exception
+                    exc_info=any(sys.exc_info()),
+                )
+                sub_proc.kill()
 
 
 async def run_in_process(async_fn: Callable[..., TReturn],
