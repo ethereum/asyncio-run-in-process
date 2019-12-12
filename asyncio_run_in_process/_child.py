@@ -28,33 +28,6 @@ from .typing import (
 logger = logging.getLogger("asyncio_run_in_process")
 
 
-#
-# CLI invocation for subprocesses
-#
-parser = argparse.ArgumentParser(description="asyncio-run-in-process")
-parser.add_argument(
-    "--parent-pid", type=int, required=True, help="The PID of the parent process"
-)
-parser.add_argument(
-    "--fd-read",
-    type=int,
-    required=True,
-    help=(
-        "The file descriptor that the child process can use to read data that "
-        "has been written by the parent process"
-    ),
-)
-parser.add_argument(
-    "--fd-write",
-    type=int,
-    required=True,
-    help=(
-        "The file descriptor that the child process can use for writing data "
-        "meant to be read by the parent process"
-    ),
-)
-
-
 def update_state(to_parent: BinaryIO, state: State) -> None:
     to_parent.write(state.value.to_bytes(1, 'big'))
     to_parent.flush()
@@ -266,6 +239,33 @@ def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
             # state: FINISHED
             update_state_finished(to_parent, finished_payload)
             sys.exit(code)
+
+
+#
+# CLI invocation for subprocesses
+#
+parser = argparse.ArgumentParser(description="asyncio-run-in-process")
+parser.add_argument(
+    "--parent-pid", type=int, required=True, help="The PID of the parent process"
+)
+parser.add_argument(
+    "--fd-read",
+    type=int,
+    required=True,
+    help=(
+        "The file descriptor that the child process can use to read data that "
+        "has been written by the parent process"
+    ),
+)
+parser.add_argument(
+    "--fd-write",
+    type=int,
+    required=True,
+    help=(
+        "The file descriptor that the child process can use for writing data "
+        "meant to be read by the parent process"
+    ),
+)
 
 
 if __name__ == "__main__":
