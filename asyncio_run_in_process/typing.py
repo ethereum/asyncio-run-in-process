@@ -4,10 +4,15 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Dict,
     TypeVar,
 )
 
 if TYPE_CHECKING:
+    #
+    # This block ensures that typing_extensions isn't needed during runtime and
+    # is only necessary for linting.
+    #
     import subprocess
     from typing import Mapping, Optional, Sequence, Union
 
@@ -75,6 +80,11 @@ if TYPE_CHECKING:
         },
         total=False,
     )
+else:
+    # Ensure this is importable outside of the `TYPE_CHECKING` context so that
+    # 3rd party libraries can use this as a type without having to think too
+    # much about what they are doing.
+    SubprocessKwargs = Dict[str, Any]
 
 
 TReturn = TypeVar("TReturn")
