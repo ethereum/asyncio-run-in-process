@@ -96,23 +96,29 @@ def rebuild_exc(exc, tb):  # type: ignore
     return exc
 
 
-def cleanup_tasks(task: 'asyncio.Future[Any]',
-                  *others: 'asyncio.Future[Any]',
-                  ) -> AsyncContextManager[None]:
+def cleanup_tasks(*tasks: 'asyncio.Future[Any]') -> AsyncContextManager[None]:
+    """
+    Context manager that ensures that all tasks are properly cancelled and awaited.
+
+    The order in which tasks are cleaned is such that the first task will be
+    the last to be cancelled/awaited.
+
+    This function **must** be called with at least one task.
+    """
     return cast(
         AsyncContextManager[None],
-        _cleanup_tasks(task, *others),
+        _cleanup_tasks(*tasks),
     )
 
 
 # mypy recognizes this decorator as being untyped.
 @asynccontextmanager  # type: ignore
 async def _cleanup_tasks(task: 'asyncio.Future[Any]',
-                         *others: 'asyncio.Future[Any]',
+                         *tasks: 'asyncio.Future[Any]',
                          ) -> AsyncIterator[None]:
     try:
-        if others:
-            async with cleanup_tasks(*others):
+        if tasks:
+            async with cleanup_tasks(*tasks):
                 yield
         else:
             yield
