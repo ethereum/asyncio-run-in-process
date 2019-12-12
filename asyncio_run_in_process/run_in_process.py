@@ -26,6 +26,10 @@ from ._utils import (
 from .abc import (
     ProcessAPI,
 )
+from .constants import (
+    SIGINT_TIMEOUT_SECONDS,
+    SIGTERM_TIMEOUT_SECONDS,
+)
 from .exceptions import (
     InvalidState,
 )
@@ -265,7 +269,7 @@ async def _open_in_process(
                 try:
                     proc.send_signal(signal.SIGINT)
                     try:
-                        await asyncio.wait_for(proc.wait(), timeout=2)
+                        await asyncio.wait_for(proc.wait(), timeout=SIGINT_TIMEOUT_SECONDS)
                     except asyncio.TimeoutError:
                         logger.debug(
                             "Timed out waiting for pid=%d to exit after relaying SIGINT",
@@ -285,7 +289,7 @@ async def _open_in_process(
                 try:
                     proc.terminate()
                     try:
-                        await asyncio.wait_for(proc.wait(), timeout=2)
+                        await asyncio.wait_for(proc.wait(), timeout=SIGTERM_TIMEOUT_SECONDS)
                     except asyncio.TimeoutError:
                         logger.debug(
                             "Timed out waiting for pid=%d to exit after SIGTERM",
