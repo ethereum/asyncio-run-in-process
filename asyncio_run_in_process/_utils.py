@@ -1,3 +1,4 @@
+import asyncio
 import io
 import os
 import sys
@@ -7,10 +8,16 @@ from types import (
 )
 from typing import (
     Any,
+    AsyncContextManager,
+    AsyncIterator,
     BinaryIO,
     Tuple,
+    cast,
 )
 
+from async_generator import (
+    asynccontextmanager,
+)
 import cloudpickle
 
 
@@ -87,3 +94,39 @@ class RemoteException(Exception):
 def rebuild_exc(exc, tb):  # type: ignore
     exc.__cause__ = RemoteTraceback(tb)
     return exc
+
+
+def cleanup_tasks(*tasks: 'asyncio.Future[Any]') -> AsyncContextManager[None]:
+    """
+    Context manager that ensures that all tasks are properly cancelled and awaited.
+
+    The order in which tasks are cleaned is such that the first task will be
+    the last to be cancelled/awaited.
+
+    This function **must** be called with at least one task.
+    """
+    return cast(
+        AsyncContextManager[None],
+        _cleanup_tasks(*tasks),
+    )
+
+
+# mypy recognizes this decorator as being untyped.
+@asynccontextmanager  # type: ignore
+async def _cleanup_tasks(task: 'asyncio.Future[Any]',
+                         *tasks: 'asyncio.Future[Any]',
+                         ) -> AsyncIterator[None]:
+    try:
+        if tasks:
+            async with cleanup_tasks(*tasks):
+                yield
+        else:
+            yield
+    finally:
+        if not task.done():
+            task.cancel()
+
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
