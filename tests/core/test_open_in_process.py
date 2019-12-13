@@ -129,3 +129,21 @@ async def test_open_proc_outer_KeyboardInterrupt():
         async with open_in_process(do_sleep_forever) as proc:
             raise KeyboardInterrupt
     assert proc.returncode == 2
+
+
+class CustomException(BaseException):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_open_proc_does_not_hang_on_exception():
+    async def do_sleep_forever():
+        while True:
+            await asyncio.sleep(0)
+
+    async def _do_inner():
+        with pytest.raises(CustomException):
+            async with open_in_process(do_sleep_forever):
+                raise CustomException("Just a boring exception")
+
+    await asyncio.wait_for(_do_inner(), timeout=1)
