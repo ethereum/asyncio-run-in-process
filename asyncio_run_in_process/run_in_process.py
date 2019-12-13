@@ -275,13 +275,12 @@ async def _open_in_process(
                             "Timed out waiting for pid=%d to exit after relaying SIGINT",
                             sub_proc.pid,
                         )
-                        pass
                 finally:
                     raise err
             except asyncio.CancelledError as err:
-                # If a keyboard interrupt is encountered relay it to the
-                # child process and then give it a moment to cleanup before
-                # re-raising
+                # If this is due to an `asyncio` cancellation we send along a
+                # SIGTERM to signal the need for more immediate cleanup, giving
+                # the child process a moment to finish before re-raising.
                 logger.debug(
                     "Got CancelledError while running subprocess pid=%d.  Sending SIGTERM.",
                     sub_proc.pid,
@@ -295,7 +294,6 @@ async def _open_in_process(
                             "Timed out waiting for pid=%d to exit after SIGTERM",
                             sub_proc.pid,
                         )
-                        pass
                 finally:
                     raise err
             else:
@@ -307,10 +305,12 @@ async def _open_in_process(
             if sub_proc.returncode is None:
                 # If the process has not returned at this stage we need to hard
                 # kill it to prevent it from hanging.
-                logger.debug(
-                    "Submodules pid=%d failed to exit cleanly.  Sending SIGKILL",
+                logger.warning(
+                    "Child process pid=%d failed to exit cleanly.  Sending SIGKILL",
                     sub_proc.pid,
-                    # include a stacktrace if this happened due to an exception
+                    # The `any` call is to include a stacktrace if this
+                    # happened due to an exception but to omit it if this is
+                    # somehow happening outside of an exception context.
                     exc_info=any(sys.exc_info()),
                 )
                 sub_proc.kill()
