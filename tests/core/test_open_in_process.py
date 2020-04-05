@@ -6,7 +6,11 @@ import pytest
 
 from asyncio_run_in_process import (
     ProcessKilled,
+    constants,
     open_in_process,
+)
+from asyncio_run_in_process.exceptions import (
+    ChildCancelled,
 )
 
 
@@ -56,7 +60,7 @@ async def test_open_proc_SIGINT_can_be_handled():
     async with open_in_process(do_sleep_forever) as proc:
         proc.send_signal(signal.SIGINT)
     assert proc.returncode == 0
-    assert proc.result == 9999
+    assert proc.get_result_or_raise() == 9999
 
 
 @pytest.mark.asyncio
@@ -81,19 +85,7 @@ async def test_open_proc_SIGINT_can_be_ignored():
         proc.send_signal(signal.SIGINT)
 
     assert proc.returncode == 0
-    assert proc.result == 9999
-
-
-@pytest.mark.asyncio
-async def test_open_proc_KeyboardInterrupt_while_running():
-    async def do_sleep_forever():
-        while True:
-            await asyncio.sleep(0)
-
-    with pytest.raises(KeyboardInterrupt):
-        async with open_in_process(do_sleep_forever) as proc:
-            raise KeyboardInterrupt
-    assert proc.returncode == 2
+    assert proc.get_result_or_raise() == 9999
 
 
 @pytest.mark.asyncio
@@ -120,7 +112,7 @@ async def test_open_proc_unpickleable_params(touch_path):
 
 
 @pytest.mark.asyncio
-async def test_open_proc_outer_KeyboardInterrupt():
+async def test_open_proc_KeyboardInterrupt_while_running():
     async def do_sleep_forever():
         while True:
             await asyncio.sleep(0)
@@ -147,3 +139,59 @@ async def test_open_proc_does_not_hang_on_exception():
                 raise CustomException("Just a boring exception")
 
     await asyncio.wait_for(_do_inner(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_error_in_child():
+    # An asyncio.CancelledError from the child process will be converted into a ChildCancelled.
+    async def raise_err():
+        await asyncio.sleep(0.01)
+        raise asyncio.CancelledError()
+
+    async def _do_inner():
+        async with open_in_process(raise_err) as proc:
+            await proc.wait_result_or_raise()
+
+    with pytest.raises(ChildCancelled):
+        await asyncio.wait_for(_do_inner(), timeout=1)
+
+
+@pytest.mark.asyncio
+async def test_task_cancellation(monkeypatch):
+    # If the task executing open_in_process() is cancelled, we will ask the child proc to
+    # terminate and propagate the CancelledError.
+
+    async def store_received_signals():
+        # Return only when we receive a SIGTERM, also checking that we received a SIGINT before
+        # the SIGTERM.
+        received_signals = []
+        loop = asyncio.get_event_loop()
+        for sig in [signal.SIGINT, signal.SIGTERM]:
+            loop.add_signal_handler(sig, received_signals.append, sig)
+        while True:
+            if signal.SIGTERM in received_signals:
+                assert [signal.SIGINT, signal.SIGTERM] == received_signals
+                return
+            await asyncio.sleep(0)
+
+    child_started = asyncio.Event()
+
+    async def runner():
+        async with open_in_process(store_received_signals) as proc:
+            child_started.set()
+            await proc.wait_result_or_raise()
+
+    monkeypatch.setattr(constants, 'SIGINT_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(constants, 'SIGTERM_TIMEOUT_SECONDS', 0.2)
+    task = asyncio.ensure_future(runner())
+    await asyncio.wait_for(child_started.wait(), timeout=1)
+    assert not task.done()
+    task.cancel()
+    # For some reason, using pytest.raises() here doesn't seem to prevent the
+    # asyncio.CancelledError from closing the event loop, causing subsequent tests to fail.
+    raised_cancelled_error = False
+    try:
+        await asyncio.wait_for(task, timeout=1)
+    except asyncio.CancelledError:
+        raised_cancelled_error = True
+    assert raised_cancelled_error

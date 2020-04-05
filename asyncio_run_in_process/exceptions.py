@@ -8,3 +8,7 @@ class ProcessKilled(BaseRunInProcessException):
 
 class InvalidState(BaseRunInProcessException):
     pass
+
+
+class ChildCancelled(BaseRunInProcessException):
+    pass

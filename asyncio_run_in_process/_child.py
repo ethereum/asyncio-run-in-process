@@ -19,6 +19,9 @@ from ._utils import (
     pickle_value,
     receive_pickled_value,
 )
+from .exceptions import (
+    ChildCancelled,
+)
 from .state import (
     State,
 )
@@ -204,8 +207,10 @@ def _run_process(parent_pid: int, fd_read: int, fd_write: int) -> None:
                     _do_async_fn(async_fn, args, to_parent, loop),
                 )
             except BaseException:
-                _, exc_value, exc_tb = sys.exc_info()
-                # `mypy` thingks that `exc_value` and `exc_tb` are `Optional[..]` types
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                # `mypy` thinks that `exc_value` and `exc_tb` are `Optional[..]` types
+                if exc_type is asyncio.CancelledError:
+                    exc_value = ChildCancelled(*exc_value.args)  # type: ignore
                 remote_exc = RemoteException(exc_value, exc_tb)  # type: ignore
                 finished_payload = pickle_value(remote_exc)
                 raise

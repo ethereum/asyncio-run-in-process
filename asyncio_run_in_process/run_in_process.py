@@ -17,6 +17,9 @@ from async_generator import (
     asynccontextmanager,
 )
 
+from . import (
+    constants,
+)
 from ._utils import (
     cleanup_tasks,
     get_subprocess_command,
@@ -25,10 +28,6 @@ from ._utils import (
 )
 from .abc import (
     ProcessAPI,
-)
-from .constants import (
-    SIGINT_TIMEOUT_SECONDS,
-    SIGTERM_TIMEOUT_SECONDS,
 )
 from .exceptions import (
     InvalidState,
@@ -72,15 +71,15 @@ async def _monitor_sub_proc(
         to_child.flush()
 
     await proc.wait_for_state(State.WAIT_EXEC_DATA)
-    logger.debug("child process %s waiting for exec data", proc)
+    logger.debug("child process %s (pid=%d) waiting for exec data", proc, sub_proc.pid)
 
     await proc.wait_for_state(State.STARTED)
-    logger.debug("waiting for process %s finish", proc)
+    logger.debug("waiting for process %s (pid=%d) to finish", proc, sub_proc.pid)
 
     await sub_proc.wait()
 
     proc.returncode = sub_proc.returncode
-    logger.debug("process %s finished: returncode=%d", proc, proc.returncode)
+    logger.debug("process %s (pid=%d) finished: returncode=%d", proc, sub_proc.pid, proc.returncode)
 
 
 async def _relay_signals(
@@ -269,31 +268,46 @@ async def _open_in_process(
                 try:
                     proc.send_signal(signal.SIGINT)
                     try:
-                        await asyncio.wait_for(proc.wait(), timeout=SIGINT_TIMEOUT_SECONDS)
+                        await asyncio.wait_for(
+                            proc.wait(), timeout=constants.SIGINT_TIMEOUT_SECONDS)
                     except asyncio.TimeoutError:
                         logger.debug(
                             "Timed out waiting for pid=%d to exit after relaying SIGINT",
                             sub_proc.pid,
                         )
+                except BaseException as e:
+                    logger.exception(
+                        "Unexpected error when terminating child; pid=%d", sub_proc.pid)
                 finally:
                     raise err
             except asyncio.CancelledError as err:
-                # If this is due to an `asyncio` cancellation we send along a
-                # SIGTERM to signal the need for more immediate cleanup, giving
-                # the child process a moment to finish before re-raising.
+                # Send the child a SIGINT and wait SIGINT_TIMEOUT_SECONDS for it to terminate. If
+                # that times out, send a SIGTERM and wait SIGTERM_TIMEOUT_SECONDS before
+                # re-raising.
                 logger.debug(
-                    "Got CancelledError while running subprocess pid=%d.  Sending SIGTERM.",
+                    "Got CancelledError while running subprocess pid=%d.  Sending SIGINT.",
                     sub_proc.pid,
                 )
                 try:
-                    proc.terminate()
+                    proc.send_signal(signal.SIGINT)
                     try:
-                        await asyncio.wait_for(proc.wait(), timeout=SIGTERM_TIMEOUT_SECONDS)
+                        await asyncio.wait_for(
+                            proc.wait(), timeout=constants.SIGINT_TIMEOUT_SECONDS)
                     except asyncio.TimeoutError:
                         logger.debug(
-                            "Timed out waiting for pid=%d to exit after SIGTERM",
+                            "Timed out waiting for pid=%d to exit after SIGINT, sending SIGTERM",
                             sub_proc.pid,
                         )
+                        proc.terminate()
+                        try:
+                            await asyncio.wait_for(
+                                proc.wait(), timeout=constants.SIGTERM_TIMEOUT_SECONDS)
+                        except asyncio.TimeoutError:
+                            logger.debug(
+                                "Timed out waiting for pid=%d to exit after SIGTERM", sub_proc.pid)
+                except BaseException as e:
+                    logger.exception(
+                        "Unexpected error when terminating child; pid=%d", sub_proc.pid)
                 finally:
                     raise err
             else:
@@ -328,4 +342,4 @@ async def run_in_process(async_fn: Callable[..., TReturn],
     )
     async with proc_ctx as proc:
         await proc.wait()
-    return proc.result
+    return proc.get_result_or_raise()

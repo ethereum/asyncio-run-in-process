@@ -68,7 +68,7 @@ async def test_Process_object_wait_for_result_when_error():
 
     async with open_in_process(raise_error) as proc:
         with pytest.raises(ValueError, match="child-error"):
-            await asyncio.wait_for(proc.wait_result(), timeout=2)
+            await asyncio.wait_for(proc.wait_result_or_raise(), timeout=2)
 
 
 @pytest.mark.asyncio
@@ -77,7 +77,7 @@ async def test_Process_object_wait_for_result_when_return_value():
         return 7
 
     async with open_in_process(return7) as proc:
-        result = await asyncio.wait_for(proc.wait_result(), timeout=2)
+        result = await asyncio.wait_for(proc.wait_result_or_raise(), timeout=2)
         assert result == 7
         assert proc.error is None
 
