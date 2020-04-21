@@ -48,7 +48,7 @@ class Process(ProcessAPI[TReturn]):
         self._state_changed = asyncio.Condition()
 
     def __str__(self) -> str:
-        return f"Process[{self._async_fn.__name__}]"
+        return f"Process[{self._async_fn}]"
 
     #
     # State
