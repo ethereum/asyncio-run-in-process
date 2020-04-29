@@ -112,6 +112,9 @@ async def _monitor_state(
                     f"Process in state {proc.state} but expected state {expected_state}"
                 )
 
+            next_expected_state = State(proc.state + 1)
+            logger.debug(
+                "Waiting for next expected state (%s) from child (%s)", next_expected_state, proc)
             child_state_as_byte = await loop.run_in_executor(None, read_exactly, from_child, 1)
 
             try:
@@ -275,7 +278,7 @@ async def _open_in_process(
                             "Timed out waiting for pid=%d to exit after relaying SIGINT",
                             sub_proc.pid,
                         )
-                except BaseException as e:
+                except BaseException:
                     logger.exception(
                         "Unexpected error when terminating child; pid=%d", sub_proc.pid)
                 finally:
@@ -305,7 +308,7 @@ async def _open_in_process(
                         except asyncio.TimeoutError:
                             logger.debug(
                                 "Timed out waiting for pid=%d to exit after SIGTERM", sub_proc.pid)
-                except BaseException as e:
+                except BaseException:
                     logger.exception(
                         "Unexpected error when terminating child; pid=%d", sub_proc.pid)
                 finally:

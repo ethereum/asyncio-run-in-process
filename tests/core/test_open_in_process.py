@@ -15,6 +15,33 @@ from asyncio_run_in_process.exceptions import (
 
 
 @pytest.mark.asyncio
+async def test_SIGINT_on_method_using_run_in_executor():
+    # This test exists only to show that one needs to be carefull when using run_in_executor() as
+    # asyncio does not cancel the thread/process it starts, so we need to make sure they return or
+    # else open_in_process() hangs forever. In the code below, this is achieved by setting the
+    # stop_loop event before the method passed to open_in_process() returns. If we don't set that
+    # event, the test hangs forever.
+    async def loop_forever_in_executor():
+        import threading
+        stop_loop = threading.Event()
+
+        def thread_loop():
+            import time
+            while not stop_loop.is_set():
+                time.sleep(0.01)
+
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(None, thread_loop)
+        finally:
+            stop_loop.set()
+
+    async with open_in_process(loop_forever_in_executor) as proc:
+        proc.send_signal(signal.SIGINT)
+    assert proc.returncode == 2
+
+
+@pytest.mark.asyncio
 async def test_open_in_proc_SIGTERM_while_running():
     async def do_sleep_forever():
         while True:
@@ -108,7 +135,7 @@ async def test_open_proc_unpickleable_params(touch_path):
         with open(touch_path, "w") as touch_file:
             async with open_in_process(takes_open_file, touch_file):
                 # this code block shouldn't get executed
-                assert False
+                assert False  # noqa: B011
 
 
 @pytest.mark.asyncio

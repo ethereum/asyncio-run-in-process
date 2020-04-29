@@ -112,7 +112,7 @@ async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.E
                     # return value of the function.
                     async with cleanup_tasks(*done, *pending):
                         return cast(TReturn, err.value)
-                except BaseException as err:
+                except BaseException:
                     raise
             else:
                 raise Exception("Code path should not be reachable")

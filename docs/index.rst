@@ -54,6 +54,18 @@ We use ``open_in_process`` for something we want to run in the background.
     print(f"The 10th fibbonacci number is {proc.result}")
 
 
+Gotchas
+-------
+
+If a function passed to ``open_in_process`` uses asyncio's ``loop.run_in_executor()``
+to run synchronous code, you must ensure the task/process terminates in case the
+``loop.run_in_executor()`` call is cancelled, or else ``open_in_process`` will not
+ever return. This is necessary because asyncio does not cancel the thread/process it
+starts (in ``loop.run_in_executor()``), and that prevents ``open_in_process`` from
+terminating. One way to ensure that is to have the code runnin in the executor react
+to an event that gets set when ``loop.run_in_executor()`` returns.
+
+
 Indices and tables
 ------------------
 
