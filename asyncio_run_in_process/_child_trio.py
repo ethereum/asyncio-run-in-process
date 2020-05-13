@@ -1,4 +1,5 @@
 import signal
+import sys
 from typing import (
     Any,
     AsyncIterator,
@@ -12,6 +13,7 @@ import trio
 import trio_typing
 
 from ._utils import (
+    RemoteException,
     pickle_value,
 )
 from .abc import (
@@ -59,8 +61,11 @@ async def _do_async_fn(
 def _run_on_trio(async_fn: TAsyncFn, args: Sequence[Any], to_parent: BinaryIO) -> None:
     try:
         result = trio.run(_do_async_fn, async_fn, args, to_parent)
-    except BaseException as err:
-        finished_payload = pickle_value(err)
+    except BaseException:
+        _, exc_value, exc_tb = sys.exc_info()
+        # `mypy` thinks that `exc_value` and `exc_tb` are `Optional[..]` types
+        remote_exc = RemoteException(exc_value, exc_tb)  # type: ignore
+        finished_payload = pickle_value(remote_exc)
         raise
     else:
         finished_payload = pickle_value(result)
