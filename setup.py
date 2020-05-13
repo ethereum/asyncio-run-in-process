@@ -15,7 +15,7 @@ extras_require = {
     'lint': [
         "flake8==3.4.1",
         "isort>=4.2.15,<5",
-        "mypy==0.740",
+        "mypy==0.770",
         "pydocstyle>=3.0.0,<4",
         "typing-extensions>=3.7.4.1,<4;python_version<'3.8'",
     ],
@@ -58,6 +58,8 @@ setup(
     install_requires=[
         "async-generator>=1.10,<2",
         "cloudpickle>=1.2.1,<2",
+        "trio>=0.13,<0.14",
+        "trio-typing>=0.3.0,<0.4",
     ],
     python_requires='>=3.6, <4',
     extras_require=extras_require,

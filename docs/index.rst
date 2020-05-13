@@ -54,6 +54,11 @@ We use ``open_in_process`` for something we want to run in the background.
     print(f"The 10th fibbonacci number is {proc.result}")
 
 
+Both functions above will run the coroutine in an asyncio event loop, but should you want to
+run them with ``trio``, the ``run_in_process_with_trio`` and ``open_in_process_with_trio``
+functions can be used.
+
+
 Gotchas
 -------
 

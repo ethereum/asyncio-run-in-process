@@ -12,7 +12,6 @@ from typing import (
     AsyncIterator,
     BinaryIO,
     Tuple,
-    cast,
 )
 
 from async_generator import (
@@ -22,14 +21,17 @@ import cloudpickle
 
 
 def get_subprocess_command(
-    child_r: int, child_w: int, parent_pid: int
+    child_r: int, child_w: int, parent_pid: int, use_trio: bool,
 ) -> Tuple[str, ...]:
-    from . import _child
+    if use_trio:
+        from . import _child_trio as child_runner
+    else:
+        from . import _child as child_runner  # type: ignore
 
     return (
         sys.executable,
         "-m",
-        _child.__name__,
+        child_runner.__name__,
         "--parent-pid",
         str(parent_pid),
         "--fd-read",
@@ -105,14 +107,10 @@ def cleanup_tasks(*tasks: 'asyncio.Future[Any]') -> AsyncContextManager[None]:
 
     This function **must** be called with at least one task.
     """
-    return cast(
-        AsyncContextManager[None],
-        _cleanup_tasks(*tasks),
-    )
+    return _cleanup_tasks(*tasks)
 
 
-# mypy recognizes this decorator as being untyped.
-@asynccontextmanager  # type: ignore
+@asynccontextmanager
 async def _cleanup_tasks(task: 'asyncio.Future[Any]',
                          *tasks: 'asyncio.Future[Any]',
                          ) -> AsyncIterator[None]:

@@ -10,7 +10,6 @@ from typing import (
     AsyncIterator,
     Callable,
     Optional,
-    cast,
 )
 
 from async_generator import (
@@ -185,10 +184,17 @@ def open_in_process(
     loop: asyncio.AbstractEventLoop = None,
     subprocess_kwargs: 'SubprocessKwargs' = None,
 ) -> AsyncContextManager[ProcessAPI[TReturn]]:
-    return cast(
-        AsyncContextManager[ProcessAPI[TReturn]],
-        _open_in_process(async_fn, *args, loop=loop, subprocess_kwargs=subprocess_kwargs),
-    )
+    return _open_in_process(
+        async_fn, *args, loop=loop, subprocess_kwargs=subprocess_kwargs, use_trio=False)
+
+
+def open_in_process_with_trio(
+    async_fn: Callable[..., TReturn],
+    *args: Any,
+    subprocess_kwargs: 'SubprocessKwargs' = None,
+) -> AsyncContextManager[ProcessAPI[TReturn]]:
+    return _open_in_process(
+        async_fn, *args, loop=None, subprocess_kwargs=subprocess_kwargs, use_trio=True)
 
 
 def _update_subprocess_kwargs(subprocess_kwargs: Optional['SubprocessKwargs'],
@@ -211,21 +217,24 @@ def _update_subprocess_kwargs(subprocess_kwargs: Optional['SubprocessKwargs'],
     return updated_kwargs
 
 
-# mypy recognizes this decorator as being untyped.
-@asynccontextmanager  # type: ignore
+@asynccontextmanager
 async def _open_in_process(
     async_fn: Callable[..., TReturn],
     *args: Any,
     loop: asyncio.AbstractEventLoop = None,
     subprocess_kwargs: 'SubprocessKwargs' = None,
+    use_trio: bool = False,
 ) -> AsyncIterator[ProcessAPI[TReturn]]:
+    if use_trio and loop is not None:
+        raise ValueError("If using trio, cannot specify a loop")
+
     proc: Process[TReturn] = Process(async_fn, args)
 
     parent_r, child_w = os.pipe()
     child_r, parent_w = os.pipe()
     parent_pid = os.getpid()
 
-    command = get_subprocess_command(child_r, child_w, parent_pid)
+    command = get_subprocess_command(child_r, child_w, parent_pid, use_trio)
 
     sub_proc = await asyncio.create_subprocess_exec(
         *command,
@@ -343,6 +352,16 @@ async def run_in_process(async_fn: Callable[..., TReturn],
         loop=loop,
         subprocess_kwargs=subprocess_kwargs,
     )
+    async with proc_ctx as proc:
+        await proc.wait()
+    return proc.get_result_or_raise()
+
+
+async def run_in_process_with_trio(async_fn: Callable[..., TReturn],
+                                   *args: Any,
+                                   subprocess_kwargs: 'SubprocessKwargs' = None) -> TReturn:
+    proc_ctx = open_in_process_with_trio(
+        async_fn, *args, subprocess_kwargs=subprocess_kwargs)
     async with proc_ctx as proc:
         await proc.wait()
     return proc.get_result_or_raise()

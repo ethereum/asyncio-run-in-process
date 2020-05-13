@@ -4,8 +4,14 @@ from abc import (
 )
 import signal
 from typing import (
+    Any,
+    BinaryIO,
+    Callable,
+    Coroutine,
     Generic,
     Optional,
+    Sequence,
+    TypeVar,
 )
 
 from .state import (
@@ -14,6 +20,9 @@ from .state import (
 from .typing import (
     TReturn,
 )
+
+TAsyncFn = TypeVar("TAsyncFn", bound=Callable[..., Coroutine[Any, Any, TReturn]])
+TEngineRunner = TypeVar("TEngineRunner", bound=Callable[[TAsyncFn, Sequence[Any], BinaryIO], None])
 
 
 class ProcessAPI(ABC, Generic[TReturn]):
