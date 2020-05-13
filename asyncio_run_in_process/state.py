@@ -16,8 +16,7 @@ class State(enum.IntEnum):
     BOOTING = 3
     STARTED = 4
     EXECUTING = 5
-    STOPPING = 6
-    FINISHED = 7
+    FINISHED = 6
 
     def is_next(self, other: "State") -> bool:
         return other == self + 1

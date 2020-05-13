@@ -90,8 +90,7 @@ async def _relay_signals(
         # can properly handle the signal, give it a moment to reach the
         # `EXECUTING` stage.
         await proc.wait_for_state(State.EXECUTING)
-    elif proc.state.is_on_or_after(State.STOPPING):
-        await proc.wait_for_state(State.FINISHED)
+    elif proc.state == State.FINISHED:
         return
 
     while True:

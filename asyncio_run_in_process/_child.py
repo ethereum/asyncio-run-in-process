@@ -182,9 +182,6 @@ def _run_on_asyncio(async_fn: TAsyncFn, args: Sequence[Any], to_parent: BinaryIO
     else:
         finished_payload = pickle_value(result)
     finally:
-        # XXX: The STOPPING state seems useless as nothing happens between that and the FINISHED
-        # state.
-        update_state(to_parent, State.STOPPING)
         update_state_finished(to_parent, finished_payload)
 
 
