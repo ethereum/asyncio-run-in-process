@@ -93,6 +93,7 @@ async def test_open_proc_SIGINT_while_running(open_in_proc):
 
     async with open_in_proc(do_sleep_forever) as proc:
         proc.send_signal(signal.SIGINT)
+
     assert proc.returncode == 2
 
 
@@ -107,6 +108,7 @@ async def test_open_proc_SIGINT_can_be_handled(open_in_proc):
 
     async with open_in_proc(do_sleep_forever) as proc:
         proc.send_signal(signal.SIGINT)
+
     assert proc.returncode == 0
     assert proc.get_result_or_raise() == 9999
 
