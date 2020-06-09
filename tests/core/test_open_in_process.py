@@ -14,6 +14,12 @@ from asyncio_run_in_process import (
 from asyncio_run_in_process.exceptions import (
     ChildCancelled,
 )
+from asyncio_run_in_process.process import (
+    Process,
+)
+from asyncio_run_in_process.state import (
+    State,
+)
 from asyncio_run_in_process.tools.sleep import (
     sleep,
 )
@@ -181,20 +187,19 @@ async def test_open_proc_with_trio_KeyboardInterrupt_while_running():
     assert proc.returncode == 2
 
 
-class CustomException(BaseException):
-    pass
-
-
 @pytest.mark.asyncio
 async def test_open_proc_does_not_hang_on_exception(open_in_proc):
-    async def do_sleep_forever():
-        while True:
-            await sleep(0)
+    class CustomException(BaseException):
+        pass
+
+    async def raise_():
+        await sleep(0.01)
+        raise CustomException("Just a boring exception")
 
     async def _do_inner():
         with pytest.raises(CustomException):
-            async with open_in_proc(do_sleep_forever):
-                raise CustomException("Just a boring exception")
+            async with open_in_proc(raise_) as proc:
+                await proc.wait_result_or_raise()
 
     await asyncio.wait_for(_do_inner(), timeout=1)
 
@@ -253,3 +258,38 @@ async def test_task_cancellation(monkeypatch):
     except asyncio.CancelledError:
         raised_cancelled_error = True
     assert raised_cancelled_error
+
+
+@pytest.mark.asyncio
+async def test_timeout_waiting_for_executing_state(open_in_proc, monkeypatch):
+    async def wait_for_state(self, state):
+        if state is State.EXECUTING:
+            await asyncio.sleep(constants.STARTUP_TIMEOUT_SECONDS + 0.1)
+
+    monkeypatch.setattr(Process, 'wait_for_state', wait_for_state)
+    monkeypatch.setattr(constants, 'STARTUP_TIMEOUT_SECONDS', 1)
+
+    async def do_sleep_forever():
+        while True:
+            await sleep(0.1)
+
+    with pytest.raises(asyncio.TimeoutError):
+        async with open_in_proc(do_sleep_forever):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_timeout_waiting_for_pid(open_in_proc, monkeypatch):
+    async def wait_pid(self):
+        await asyncio.sleep(constants.STARTUP_TIMEOUT_SECONDS + 0.1)
+
+    monkeypatch.setattr(Process, 'wait_pid', wait_pid)
+    monkeypatch.setattr(constants, 'STARTUP_TIMEOUT_SECONDS', 1)
+
+    async def do_sleep_forever():
+        while True:
+            await sleep(0.1)
+
+    with pytest.raises(asyncio.TimeoutError):
+        async with open_in_proc(do_sleep_forever):
+            pass

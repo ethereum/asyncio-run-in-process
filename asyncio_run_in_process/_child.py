@@ -41,11 +41,6 @@ logger = logging.getLogger("asyncio_run_in_process")
 SHUTDOWN_SIGNALS = {signal.SIGTERM}
 
 
-async def _handle_SIGTERM(task: 'asyncio.Task[TReturn]', fut: 'asyncio.Future[int]') -> None:
-    signum = await fut
-    raise SystemExit(signum)
-
-
 async def _handle_coro(coro: Coroutine[Any, Any, TReturn], got_SIGINT: asyncio.Event) -> TReturn:
     """
     Understanding this function requires some detailed knowledge of how
@@ -128,15 +123,15 @@ async def _do_async_fn(
             signum,
         )
 
-    # state: EXECUTING
-    update_state(to_parent, State.EXECUTING)
-
     # Install a signal handler to set an asyncio.Event upon receiving a SIGINT
     got_SIGINT = asyncio.Event()
     loop.add_signal_handler(
         signal.SIGINT,
         got_SIGINT.set,
     )
+
+    # state: EXECUTING
+    update_state(to_parent, State.EXECUTING)
 
     # First we need to generate a coroutine.  We need this so we can throw
     # exceptions into the running coroutine to allow it to handle keyboard

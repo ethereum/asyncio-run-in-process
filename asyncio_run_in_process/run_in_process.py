@@ -89,19 +89,24 @@ async def _relay_signals(
         # If the process has not reached the state where the child process
         # can properly handle the signal, give it a moment to reach the
         # `EXECUTING` stage.
+        logger.debug("_relay_signals(): Waiting for %s to reach EXECUTING state", proc)
         await proc.wait_for_state(State.EXECUTING)
-    elif proc.state == State.FINISHED:
+    elif proc.state is State.FINISHED:
+        logger.debug("_relay_signals(): %s is already finished, exiting %s", proc)
         return
 
+    logger.debug("_relay_signals(): Waiting for signals to relay to %s", proc)
     while True:
         signum = await queue.get()
-
         logger.debug("relaying signal %s to child process %s", signum, proc)
         proc.send_signal(signum)
 
 
 async def _monitor_state(
-    proc: ProcessAPI[TReturn], parent_read_fd: int, loop: asyncio.AbstractEventLoop,
+    proc: ProcessAPI[TReturn],
+    parent_read_fd: int,
+    child_write_fd: int,
+    loop: asyncio.AbstractEventLoop,
 ) -> None:
     with os.fdopen(parent_read_fd, "rb", closefd=True) as from_child:
         for expected_state in State:
@@ -113,7 +118,18 @@ async def _monitor_state(
             next_expected_state = State(proc.state + 1)
             logger.debug(
                 "Waiting for next expected state (%s) from child (%s)", next_expected_state, proc)
-            child_state_as_byte = await loop.run_in_executor(None, read_exactly, from_child, 1)
+            try:
+                child_state_as_byte = await loop.run_in_executor(None, read_exactly, from_child, 1)
+            except asyncio.CancelledError:
+                # When the sub process is sent a SIGKILL, the write end of the pipe used in
+                # read_exactly is never closed and the thread above attempting to read from it
+                # will prevent us from leaving this fdopen() context, so we need to close the
+                # write end ourselves to ensure the read_exactly() returns.
+                logger.debug(
+                    "_monitor_state() cancelled while waiting data from child, closing "
+                    "child_write_fd to ensure we exit")
+                os.close(child_write_fd)
+                raise
 
             try:
                 child_state = State(ord(child_state_as_byte))
@@ -121,13 +137,11 @@ async def _monitor_state(
                 raise InvalidState(f"Child sent state: {child_state_as_byte.hex()}")
 
             if not proc.state.is_next(child_state):
-                if proc.state is State.FINISHED:
-                    # This case covers when the process is killed with a SIGKILL
-                    # and jumps directly to the finished state.
-                    return
                 raise InvalidState(
                     f"Invalid state transition: {proc.state} -> {child_state}"
                 )
+
+            logger.debug("Got next state (%s) from child (%s)", child_state, proc)
 
             if child_state is State.FINISHED:
                 # For the FINISHED state we delay updating the state until we also
@@ -149,13 +163,23 @@ async def _monitor_state(
                 child_state.name,
             )
 
-        # This is mostly a sanity check but it ensures that the loop variable is
-        # what we expect it to be before starting to collect the result the stream.
+        # This is mostly a sanity check but it ensures that we don't try to get a result from a
+        # process which hasn't finished.
         if child_state is not State.FINISHED:
             raise InvalidState(f"Invalid final state: {proc.state}")
 
-        result = await loop.run_in_executor(None, receive_pickled_value, from_child)
+        logger.debug("Waiting for result from %s", proc)
+        try:
+            result = await loop.run_in_executor(None, receive_pickled_value, from_child)
+        except asyncio.CancelledError:
+            # See comment above as to why we need to do this.
+            logger.debug(
+                "_monitor_state() cancelled while waiting data from child, closing "
+                "child_write_fd to ensure we exit")
+            os.close(child_write_fd)
+            raise
 
+    logger.debug("Waiting for returncode from %s", proc)
     await proc.wait_returncode()
 
     if proc.returncode == 0:
@@ -254,19 +278,33 @@ async def _open_in_process(
     # Monitoring
     monitor_sub_proc_task = asyncio.ensure_future(_monitor_sub_proc(proc, sub_proc, parent_w))
     relay_signals_task = asyncio.ensure_future(_relay_signals(proc, signal_queue))
-    monitor_state_task = asyncio.ensure_future(_monitor_state(proc, parent_r, loop))
+    monitor_state_task = asyncio.ensure_future(_monitor_state(proc, parent_r, child_w, loop))
 
     async with cleanup_tasks(monitor_sub_proc_task, relay_signals_task, monitor_state_task):
-        await proc.wait_pid()
+        try:
+            await asyncio.wait_for(proc.wait_pid(), timeout=constants.STARTUP_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            sub_proc.kill()
+            raise asyncio.TimeoutError(
+                f"{proc} took more than {constants.STARTUP_TIMEOUT_SECONDS} seconds to start up")
 
-        # Wait until the child process has reached the STARTED
+        logger.debug(
+            "Got pid %d for %s, waiting for it to reach EXECUTING state before yielding",
+            proc.pid, proc)
+        # Wait until the child process has reached the EXECUTING
         # state before yielding the context.  This ensures that any
         # calls to things like `terminate` or `kill` will be handled
         # properly in the child process.
         #
         # The timeout ensures that if something is fundamentally wrong
         # with the subprocess we don't hang indefinitely.
-        await proc.wait_for_state(State.STARTED)
+        try:
+            await asyncio.wait_for(
+                proc.wait_for_state(State.EXECUTING), timeout=constants.STARTUP_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            sub_proc.kill()
+            raise asyncio.TimeoutError(
+                f"{proc} took more than {constants.STARTUP_TIMEOUT_SECONDS} seconds to start up")
 
         try:
             try:
@@ -325,6 +363,11 @@ async def _open_in_process(
                 # In the case that the yielded context block exits without an
                 # error we wait for the process to finish naturally.  This can
                 # hang indefinitely.
+                logger.debug(
+                    "Waiting for %s (pid=%d) to finish naturally, this can hang forever",
+                    proc,
+                    proc.pid,
+                )
                 await proc.wait()
         finally:
             if sub_proc.returncode is None:
