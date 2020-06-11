@@ -208,6 +208,7 @@ def run_process(runner: TEngineRunner, fd_read: int, fd_write: int) -> None:
         except SystemExit as err:
             code = err.args[0]
         except BaseException:
+            logger.exception("%s raised an unexpected exception", async_fn)
             code = 1
         else:
             code = 0

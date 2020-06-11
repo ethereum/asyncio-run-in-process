@@ -7,6 +7,7 @@ from setuptools import (
 
 extras_require = {
     'test': [
+        "async-exit-stack==1.0.1",
         "pytest==5.2.2",
         "pytest-asyncio==0.10.0",
         "pytest-xdist",

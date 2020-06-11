@@ -1,4 +1,5 @@
 import asyncio
+import concurrent
 import logging
 import os
 import signal
@@ -47,6 +48,15 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger("asyncio_run_in_process")
+_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+
+
+def _get_executor() -> concurrent.futures.ThreadPoolExecutor:
+    global _executor
+    if _executor is None:
+        max_procs = int(os.getenv('ASYNCIO_RUN_IN_PROCESS_MAX_PROCS', constants.MAX_PROCESSES))
+        _executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_procs)
+    return _executor
 
 
 async def _monitor_sub_proc(
@@ -119,7 +129,8 @@ async def _monitor_state(
             logger.debug(
                 "Waiting for next expected state (%s) from child (%s)", next_expected_state, proc)
             try:
-                child_state_as_byte = await loop.run_in_executor(None, read_exactly, from_child, 1)
+                child_state_as_byte = await loop.run_in_executor(
+                    _get_executor(), read_exactly, from_child, 1)
             except asyncio.CancelledError:
                 # When the sub process is sent a SIGKILL, the write end of the pipe used in
                 # read_exactly is never closed and the thread above attempting to read from it
@@ -152,7 +163,7 @@ async def _monitor_state(
                 # process id.  The process ID is gotten via this mechanism to
                 # prevent the need for ugly sleep based code in
                 # `_monitor_sub_proc`.
-                pid_bytes = await loop.run_in_executor(None, read_exactly, from_child, 4)
+                pid_bytes = await loop.run_in_executor(_get_executor(), read_exactly, from_child, 4)
                 proc.pid = int.from_bytes(pid_bytes, 'big')
 
             await proc.update_state(child_state)
@@ -170,7 +181,7 @@ async def _monitor_state(
 
         logger.debug("Waiting for result from %s", proc)
         try:
-            result = await loop.run_in_executor(None, receive_pickled_value, from_child)
+            result = await loop.run_in_executor(_get_executor(), receive_pickled_value, from_child)
         except asyncio.CancelledError:
             # See comment above as to why we need to do this.
             logger.debug(
@@ -279,13 +290,15 @@ async def _open_in_process(
     relay_signals_task = asyncio.ensure_future(_relay_signals(proc, signal_queue))
     monitor_state_task = asyncio.ensure_future(_monitor_state(proc, parent_r, child_w, loop))
 
+    startup_timeout = int(
+        os.getenv('ASYNCIO_RUN_IN_PROCESS_STARTUP_TIMEOUT', constants.STARTUP_TIMEOUT_SECONDS))
     async with cleanup_tasks(monitor_sub_proc_task, relay_signals_task, monitor_state_task):
         try:
-            await asyncio.wait_for(proc.wait_pid(), timeout=constants.STARTUP_TIMEOUT_SECONDS)
+            await asyncio.wait_for(proc.wait_pid(), timeout=startup_timeout)
         except asyncio.TimeoutError:
             sub_proc.kill()
             raise asyncio.TimeoutError(
-                f"{proc} took more than {constants.STARTUP_TIMEOUT_SECONDS} seconds to start up")
+                f"{proc} took more than {startup_timeout} seconds to start up")
 
         logger.debug(
             "Got pid %d for %s, waiting for it to reach EXECUTING state before yielding",
@@ -298,12 +311,12 @@ async def _open_in_process(
         # The timeout ensures that if something is fundamentally wrong
         # with the subprocess we don't hang indefinitely.
         try:
-            await asyncio.wait_for(
-                proc.wait_for_state(State.EXECUTING), timeout=constants.STARTUP_TIMEOUT_SECONDS)
+            logger.debug("Waiting for proc pid=%d to reach EXECUTING state", proc.pid)
+            await asyncio.wait_for(proc.wait_for_state(State.EXECUTING), timeout=startup_timeout)
         except asyncio.TimeoutError:
             sub_proc.kill()
             raise asyncio.TimeoutError(
-                f"{proc} took more than {constants.STARTUP_TIMEOUT_SECONDS} seconds to start up")
+                f"{proc} took more than {startup_timeout} seconds to start up")
 
         try:
             try:

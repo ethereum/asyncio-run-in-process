@@ -59,6 +59,13 @@ run them with ``trio``, the ``run_in_process_with_trio`` and ``open_in_process_w
 functions can be used.
 
 
+Maximum number of running processes
+-----------------------------------
+
+By default we can only have up to ``MAX_PROCESSES`` running at any given moment, but that can
+be changed via the ``ASYNCIO_RUN_IN_PROCESS_MAX_PROCS`` environment variable.
+
+
 Gotchas
 -------
 

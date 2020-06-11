@@ -1,13 +1,18 @@
 import asyncio
+import concurrent
 import pickle
 import signal
 
 import pytest
 import trio
 
+from async_exit_stack import (
+    AsyncExitStack,
+)
 from asyncio_run_in_process import (
     ProcessKilled,
     constants,
+    main,
     open_in_process,
     open_in_process_with_trio,
 )
@@ -295,3 +300,49 @@ async def test_timeout_waiting_for_pid(open_in_proc, monkeypatch):
     with pytest.raises(asyncio.TimeoutError):
         async with open_in_proc(do_sleep_forever):
             pass
+
+
+@pytest.mark.asyncio
+async def test_max_processes(monkeypatch, open_in_proc):
+    async def do_sleep_forever():
+        while True:
+            await sleep(0.2)
+
+    max_procs = 4
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_procs)
+    # We need to monkeypatch _get_executor() instead of setting the
+    # ASYNCIO_RUN_IN_PROCESS_MAX_PROCS environment variable because if another test runs before us
+    # it will cause _get_executor() to store a global executor created using the default number of
+    # max procs and then when it got called again here it'd reuse that executor.
+    monkeypatch.setattr(main, '_get_executor', lambda: executor)
+    monkeypatch.setenv('ASYNCIO_RUN_IN_PROCESS_STARTUP_TIMEOUT', str(1))
+
+    above_limit_proc_created = False
+    procs = []
+    async with AsyncExitStack() as stack:
+        for _ in range(max_procs):
+            proc = await stack.enter_async_context(open_in_proc(do_sleep_forever))
+            procs.append(proc)
+
+        for proc in procs:
+            assert proc.state is State.EXECUTING
+
+        try:
+            async with open_in_proc(do_sleep_forever) as proc:
+                # This should not execute as the above should raise a TimeoutError, but in case it
+                # doesn't happen we need to ensure the proc is terminated so we can leave the
+                # context and fail the test below.
+                proc.send_signal(signal.SIGINT)
+        except asyncio.TimeoutError:
+            pass
+        else:
+            above_limit_proc_created = True
+        finally:
+            for proc in procs:
+                proc.send_signal(signal.SIGINT)
+
+    # We want to fail the test only after we leave the AsyncExitStack(), or else it will pass the
+    # exception along when returning control to open_in_proc(), which will interpret it as a
+    # failure of the process to exit and send a SIGKILL (together with a warning).
+    if above_limit_proc_created:
+        assert False, "This process must not have been created successfully"
