@@ -255,9 +255,8 @@ async def _open_in_process(
 
     parent_r, child_w = os.pipe()
     child_r, parent_w = os.pipe()
-    parent_pid = os.getpid()
 
-    command = get_subprocess_command(child_r, child_w, parent_pid, use_trio)
+    command = get_subprocess_command(child_r, child_w, use_trio)
 
     sub_proc = await asyncio.create_subprocess_exec(
         *command,

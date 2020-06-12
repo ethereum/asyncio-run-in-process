@@ -180,7 +180,7 @@ def _run_on_asyncio(async_fn: TAsyncFn, args: Sequence[Any], to_parent: BinaryIO
         update_state_finished(to_parent, finished_payload)
 
 
-def run_process(runner: TEngineRunner, parent_pid: int, fd_read: int, fd_write: int) -> None:
+def run_process(runner: TEngineRunner, fd_read: int, fd_write: int) -> None:
     """
     Run the child process.
 
@@ -220,9 +220,6 @@ def run_process(runner: TEngineRunner, parent_pid: int, fd_read: int, fd_write: 
 #
 parser = argparse.ArgumentParser(description="asyncio-run-in-process")
 parser.add_argument(
-    "--parent-pid", type=int, required=True, help="The PID of the parent process"
-)
-parser.add_argument(
     "--fd-read",
     type=int,
     required=True,
@@ -246,7 +243,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     run_process(
         runner=_run_on_asyncio,
-        parent_pid=args.parent_pid,
         fd_read=args.fd_read,
         fd_write=args.fd_write,
     )

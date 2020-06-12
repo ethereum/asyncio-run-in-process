@@ -78,7 +78,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     run_process(
         runner=_run_on_trio,
-        parent_pid=args.parent_pid,
         fd_read=args.fd_read,
         fd_write=args.fd_write,
     )

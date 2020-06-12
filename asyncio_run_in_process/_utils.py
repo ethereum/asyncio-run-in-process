@@ -20,9 +20,7 @@ from async_generator import (
 import cloudpickle
 
 
-def get_subprocess_command(
-    child_r: int, child_w: int, parent_pid: int, use_trio: bool,
-) -> Tuple[str, ...]:
+def get_subprocess_command(child_r: int, child_w: int, use_trio: bool) -> Tuple[str, ...]:
     if use_trio:
         from . import _child_trio as child_runner
     else:
@@ -32,8 +30,6 @@ def get_subprocess_command(
         sys.executable,
         "-m",
         child_runner.__name__,
-        "--parent-pid",
-        str(parent_pid),
         "--fd-read",
         str(child_r),
         "--fd-write",
