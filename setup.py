@@ -48,7 +48,7 @@ with open('./README.md') as readme:
 setup(
     name='asyncio-run-in-process',
     # *IMPORTANT*: Don't manually change the version here. Use `make bump`, as described in readme
-    version='0.1.0-alpha.8',
+    version='0.1.0-alpha.9',
     description="""asyncio-run-in-process: Asyncio friendly replacement for multiprocessing""",
     long_description=long_description,
     long_description_content_type='text/markdown',
