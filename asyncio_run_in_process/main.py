@@ -30,7 +30,9 @@ from .abc import (
     ProcessAPI,
 )
 from .exceptions import (
+    InvalidDataFromChild,
     InvalidState,
+    UnpickleableValue,
 )
 from .process import (
     Process,
@@ -182,6 +184,12 @@ async def _monitor_state(
         logger.debug("Waiting for result from %s", proc)
         try:
             result = await loop.run_in_executor(_get_executor(), receive_pickled_value, from_child)
+        except UnpickleableValue as e:
+            result = InvalidDataFromChild(
+                "Unable to unpickle data from child. This may be a custom exception class; see "
+                "https://github.com/ethereum/asyncio-run-in-process/issues/28 for more details. "
+                "Original error: %s" % e.args)
+            result.__cause__ = e
         except asyncio.CancelledError:
             # See comment above as to why we need to do this.
             logger.debug(
@@ -193,7 +201,12 @@ async def _monitor_state(
     logger.debug("Waiting for returncode from %s", proc)
     await proc.wait_returncode()
 
-    if proc.returncode == 0:
+    if isinstance(result, InvalidDataFromChild):
+        # When we're unable to unpickle the result from the child, we need to force an error
+        # so that the InvalidDataFromChild is raised in .wait_result_or_raise().
+        proc.error = result
+        proc.returncode = -99
+    elif proc.returncode == 0:
         proc.return_value = result
     else:
         proc.error = result

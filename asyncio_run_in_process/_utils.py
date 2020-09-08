@@ -19,6 +19,10 @@ from async_generator import (
 )
 import cloudpickle
 
+from asyncio_run_in_process.exceptions import (
+    UnpickleableValue,
+)
+
 
 def get_subprocess_command(child_r: int, child_w: int, use_trio: bool) -> Tuple[str, ...]:
     if use_trio:
@@ -60,7 +64,10 @@ def receive_pickled_value(stream: BinaryIO) -> Any:
     len_bytes = read_exactly(stream, 4)
     serialized_len = int.from_bytes(len_bytes, "big")
     serialized_result = read_exactly(stream, serialized_len)
-    return cloudpickle.loads(serialized_result)
+    try:
+        return cloudpickle.loads(serialized_result)
+    except BaseException as e:
+        raise UnpickleableValue(*e.args) from e
 
 
 class RemoteTraceback(Exception):

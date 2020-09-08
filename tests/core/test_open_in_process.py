@@ -18,6 +18,7 @@ from asyncio_run_in_process import (
 )
 from asyncio_run_in_process.exceptions import (
     ChildCancelled,
+    InvalidDataFromChild,
 )
 from asyncio_run_in_process.process import (
     Process,
@@ -212,6 +213,27 @@ async def test_open_proc_does_not_hang_on_exception(open_in_proc):
 
 
 @pytest.mark.asyncio
+async def test_open_proc_unpickleable_exc(open_in_proc):
+    # Custom exception classes requiring multiple arguments cannot be pickled:
+    # https://bugs.python.org/issue32696
+    class CustomException(BaseException):
+        def __init__(self, msg, arg2):
+            super().__init__(msg)
+            self.arg2 = arg2
+
+    async def raise_():
+        await sleep(0.01)
+        raise CustomException('msg', 'arg2')
+
+    async def _do_inner():
+        with pytest.raises(InvalidDataFromChild):
+            async with open_in_proc(raise_) as proc:
+                await proc.wait_result_or_raise()
+
+    await asyncio.wait_for(_do_inner(), timeout=1)
+
+
+@pytest.mark.asyncio
 async def test_cancelled_error_in_child():
     # An asyncio.CancelledError from the child process will be converted into a ChildCancelled.
     async def raise_err():
@@ -345,4 +367,4 @@ async def test_max_processes(monkeypatch, open_in_proc):
     # exception along when returning control to open_in_proc(), which will interpret it as a
     # failure of the process to exit and send a SIGKILL (together with a warning).
     if above_limit_proc_created:
-        assert False, "This process must not have been created successfully"
+        raise AssertionError("This process must not have been created successfully")
